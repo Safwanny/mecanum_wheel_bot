@@ -1,0 +1,3 @@
+# Keep generated odometry reports local while retaining this directory.
+*
+!.gitignore

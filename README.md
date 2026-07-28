@@ -1,0 +1,637 @@
+# Mobile Base
+
+Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platform.
+
+## Packages
+
+| Package | Responsibility |
+| --- | --- |
+| `mobile_base_description` | Xacro model, SI-unit geometry, inertial data, and RViz configuration |
+| `mobile_base_gazebo` | Gazebo Harmonic world and simulator-specific assets |
+| `mobile_base_bringup` | ros2_control configuration and top-level launch files |
+| `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
+
+The packages are independent of the existing arm stack.
+
+## Units and CAD source
+
+URDF and controller values use SI units: metres, kilograms, seconds, and radians.
+The original CAD file remains at `src/3D_Builds/ROS2_transfer.stl` and is not loaded
+at runtime. The base model uses one parametric body link. The mecanum wheels use four
+position-specific STL files for visual appearance and primitive cylinders on the
+passive roller links for collision.
+
+The wheel meshes live in `src/mobile_base/meshes/wheels/` and are installed through
+the description package. Gazebo receives runtime-generated `file://` mesh URIs from
+the installed `mobile_base_description` share directory.
+
+The four STL files were exported in assembly coordinates, so `base.xacro` gives every
+wheel an explicit position-specific visual rotation and translation. Each rigid
+transform flips the exported mounting face inward toward the chassis and keeps the
+mesh axle centre coincident with the driven-wheel link origin. The flip is composed
+about a mesh-local transverse axis aligned with that wheel's measured roller phase;
+this preserves the visual roller phase set and mecanum X-pattern. These visual
+transforms are independent of physical roller handedness, joints, collisions,
+controller configuration, and odometry.
+
+## URDF organization
+
+The main assembly file is
+`mobile_base_description/urdf/mobile_base.urdf.xacro`. It should stay readable at the
+robot level: arguments, includes, base assembly, camera, ros2_control, and optional
+Gazebo plugin/sensor instantiation.
+
+| File | Responsibility |
+| --- | --- |
+| `properties.xacro` | Shared robot and sensor dimensions, masses, poses, rates, ranges, and noise |
+| `materials.xacro` | Named visual materials |
+| `inertials.xacro` | Reusable inertial macros |
+| `chassis.xacro` | `base_footprint`, `base_link`, and body geometry |
+| `macros/mecanum_rollers.xacro` | Recursive physical roller links, passive joints, collisions, and contact parameters |
+| `macros/mecanum_wheels.xacro` | Driven hub links, existing wheel visuals, wheel joints, and roller-ring invocation |
+| `base.xacro` | Chassis plus four mecanum wheel assembly |
+| `camera.xacro` | Front RGB camera link, optical frame, fixed joints, geometry, and inertia |
+| `lidar.xacro` / `imu.xacro` | Fixed physical sensor links, joints, geometry, and inertia |
+| `mobile_base.ros2_control.xacro` | ros2_control hardware and command/state interfaces |
+| `mobile_base.gazebo.xacro` | Gazebo Harmonic ros2_control plugin wrapper |
+| `camera.gazebo.xacro` | Gazebo Harmonic camera sensor configuration |
+| `lidar.gazebo.xacro` / `imu.gazebo.xacro` | Gazebo sensor, topic, rate, and noise configuration |
+
+## Frames and hierarchy
+
+The model follows REP-103: `+X` forward, `+Y` left, and `+Z` up. Wheelbase is the
+front-to-rear wheel-center spacing. Wheel separation is the left-to-right track width.
+
+```text
+odom
+`-- base_footprint
+    `-- base_link
+    |-- front_left_wheel_link
+    |   `-- front_left_roller_0_link ... front_left_roller_9_link
+    |-- front_right_wheel_link
+    |   `-- front_right_roller_0_link ... front_right_roller_9_link
+    |-- rear_right_wheel_link
+    |   `-- rear_right_roller_0_link ... rear_right_roller_9_link
+    |-- rear_left_wheel_link
+    |   `-- rear_left_roller_0_link ... rear_left_roller_9_link
+    |-- lidar_link
+    |-- imu_link
+    `-- camera_link
+        `-- camera_optical_frame
+```
+
+Each wheel link owns its internal roller links through the wheel macro. The top-level
+assembly intentionally does not expose those roller links.
+
+## Dependencies
+
+Install dependencies after sourcing ROS 2 Jazzy:
+
+```bash
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
+```
+
+The Gazebo launch requires `ros_gz_sim`, `ros_gz_bridge`, and `gz_ros2_control`.
+
+## Build and inspect
+
+```bash
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select \
+  mobile_base_description mobile_base_gazebo mobile_base_tools mobile_base_bringup
+source install/setup.bash
+xacro src/mobile_base/mobile_base_description/urdf/mobile_base.urdf.xacro > /tmp/mobile_base.urdf
+check_urdf /tmp/mobile_base.urdf
+ros2 launch mobile_base_description display.launch.py
+```
+
+This command is only for inspecting the URDF without Gazebo. It uses a headless
+joint-state publisher by default so every movable link remains visible. To show the
+optional joint sliders, add `use_joint_state_gui:=true` and keep that GUI open.
+
+## Simulate
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py
+```
+
+`world` accepts an installed world name (with or without `.sdf`) or an absolute
+SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
+`start_controller`, `namespace`, `x`, `y`, `z`, and `yaw`.
+
+Wheel appearance comes from the full position-specific mecanum wheel meshes. Gazebo
+motion is physical: the controller drives four wheel joints, each wheel carries ten
+continuous passive roller joints, and the 40 primitive roller collisions contact the
+ground. The driven hub links intentionally have no collision geometry, so wheel-ground
+contact cannot bypass the rollers.
+
+## Explicit passive roller model
+
+Each visual wheel mesh contains ten measured rollers. The physical model matches that
+geometry with a `0.02505 m` roller-centre radius, `0.00569443 m` roller radius,
+`0.02580 m` roller length, 36-degree spacing, and 45-degree roller inclination. The
+effective contact radius remains the controller wheel radius:
+
+```text
+0.02505 + 0.00569443 = 0.03074443 m
+```
+
+The measured position-specific roller configuration is:
+
+| Wheel | Handedness | Zero-angle phase (rad) | Local wheel-Y offset (m) |
+| --- | ---: | ---: | ---: |
+| front-left | -1 | 0.22193969 | -0.00059729 |
+| front-right | +1 | 0.48030419 | +0.00059729 |
+| rear-right | -1 | 0.19668582 | +0.00059729 |
+| rear-left | +1 | 0.24790784 | -0.00059729 |
+
+For roller angle `theta`, the wheel axle is `a=(0,1,0)` and the increasing-angle
+tangent is `t=(-sin(theta),0,cos(theta))`. The roller axis is
+`cos(pi/4)*a + handedness*sin(pi/4)*t`. The roller child frame maps local Z onto this
+axis, allowing every passive joint to use a normalized local `axis="0 0 1"` while its
+cylinder collision and inertia use the same frame.
+
+The original `0.12 kg` wheel assembly mass is preserved rather than duplicated:
+the collision-free driven hub is `0.084 kg`, and each of its ten rollers is
+`0.0036 kg`. Passive joint damping is `0.001` and friction is `0.00005`. Each roller
+uses isotropic contact friction `mu1=mu2=0.8`, contact stiffness `100000`, and contact
+damping `10`. There is no wheel-level `fdir1` or anisotropic contact approximation.
+
+Only the four driven wheel joints have velocity command interfaces. All 44 movable
+joints—the four wheels and 40 rollers—have position and velocity state interfaces.
+Inspect them while the simulation is running:
+
+```bash
+ros2 control list_hardware_interfaces
+ros2 topic echo /joint_states --once
+ros2 topic echo /joint_states --field name --once
+```
+
+The STL wheel remains one visual attached to the hub link. Consequently, its rendered
+rollers do not visibly spin independently even though the 40 collision-only roller
+links rotate and report state. The corrected inner/outer visual face orientation does
+not change those physical contacts. The explicit model adds 40 links, 40 joints, 40
+collision bodies, and 80 state interfaces; primitive cylinders keep its simulation
+cost bounded, but it is still more CPU-intensive than a one-body contact
+approximation.
+
+The recursive roller organization was informed by
+[`DaiGuard/fuji_mecanum`](https://github.com/DaiGuard/fuji_mecanum), an MIT-licensed
+structural reference. Its ROS 1 controller, Python 2 node, transmissions, meshes,
+dimensions, and Gazebo Classic configuration were not ported.
+
+The simulation launch already starts its own robot-state publisher and RViz. Do not
+run `display.launch.py` at the same time, because duplicate description and TF
+publishers can make the model appear incomplete.
+
+If a launch reports a missing `libgz-transport` library, stop that failed launch with
+`Ctrl-C` before retrying. The bringup launch reconstructs the Gazebo vendor environment
+automatically, but an older failed launch can leave conflicting ROS nodes behind.
+
+The simulation launch starts Gazebo, publishes `robot_description`, spawns the robot,
+loads `joint_state_broadcaster`, activates `mobile_base_controller`, starts the
+odometry-to-path utility, and opens RViz. Simulation RViz uses `odom` as its fixed
+frame. Retained Odometry arrows and covariance visuals (the old red fan and yellow
+bands) were unsuitable for trajectory display, so Odometry now shows only the current
+pose and `rviz_default_plugins/Path` draws `/mobile_base/trajectory`
+(`nav_msgs/msg/Path`) as one line.
+
+The path node samples `/mobile_base_controller/odometry` after 0.02 m translation or
+0.05 rad yaw change, keeps at most 1000 poses, and publishes reliable transient-local
+data for late RViz subscribers. Reset it with
+`ros2 service call /mobile_base/trajectory/reset std_srvs/srv/Empty {}`. Useful checks:
+
+```bash
+ros2 topic type /mobile_base/trajectory
+ros2 topic echo /mobile_base/trajectory --once
+ros2 topic info -v /mobile_base/trajectory
+```
+
+The static URDF display launch still uses the base-fixed RViz configuration.
+
+## Camera
+
+The fixed RGB camera is centered on the front (`+X`) face of `base_link`. In Gazebo it
+publishes:
+
+- Image: `/camera/image_raw`
+- Camera info: `/camera/camera_info`
+
+Quick checks:
+
+```bash
+ros2 topic hz /camera/image_raw
+ros2 topic echo --once /camera/camera_info
+ros2 run rqt_image_view rqt_image_view /camera/image_raw
+```
+
+## Simulated LiDAR and IMU
+
+The robot carries a fixed planar GPU LiDAR and a fixed six-axis IMU. Their
+dimensions, mass, mounting poses, rates, range, and Gaussian noise values are
+centralized in `properties.xacro`. Sensor links remain part of the normal URDF;
+their Gazebo sensor elements are enabled only by `use_gazebo:=true`.
+
+| ROS interface | Type | Frame | Nominal rate | Main configuration |
+| --- | --- | --- | ---: | --- |
+| `/scan` | `sensor_msgs/msg/LaserScan` | `lidar_link` | 10 Hz | 720 samples, 360 degrees, 0.10-4.0 m, 0.01 m stddev |
+| `/imu/data` | `sensor_msgs/msg/Imu` | `imu_link` | 50 Hz | 3-axis angular velocity and linear acceleration noise |
+
+Both frames are fixed children of `base_link`. Gazebo publishes native
+`gz.msgs.LaserScan` and `gz.msgs.IMU`; the launch bridges them one-way into ROS.
+The world supplies the Sensors system with Ogre2 and the IMU system. No
+localization, SLAM, Nav2, or sensor fusion is started.
+
+Four self-contained worlds are installed; none downloads external models:
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py world:=empty
+ros2 launch mobile_base_bringup simulation.launch.py world:=sensor_test
+ros2 launch mobile_base_bringup simulation.launch.py world:=navigation_basic
+ros2 launch mobile_base_bringup simulation.launch.py world:=navigation_narrow
+```
+
+`sensor_test` places a wall at `x=3 m`, a box to the left, and a cylinder to the
+right for recognizable scan returns. `navigation_basic` is a room with walls,
+routes, boxes, and a column. `navigation_narrow` contains a 1 m corridor,
+doorway, L-shaped turn, and dead end. An absolute custom file works too:
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py \
+  world:=/absolute/path/to/custom_world.sdf
+```
+
+RViz uses `odom` as its fixed frame and shows the robot, TF frames and axes,
+`/scan`, current odometry, trajectory path, and camera image. The IMU pose is
+represented by the `imu_link` TF axes; raw angular velocity and acceleration are
+checked from the message:
+
+```bash
+ros2 topic hz /scan
+ros2 topic echo /scan --once
+ros2 topic hz /imu/data
+ros2 topic echo /imu/data --once
+ros2 run tf2_ros tf2_echo base_link lidar_link
+ros2 run tf2_ros tf2_echo base_link imu_link
+```
+
+Expected stationary IMU behavior is a near-identity orientation, near-zero
+angular velocity, and approximately `+9.81 m/s^2` along its Z axis, with small
+configured noise. During positive yaw rotation, `angular_velocity.z` should be
+positive. Scan ranges may contain `inf` where no surface lies inside the
+configured maximum range; finite returns must fall between `range_min` and
+`range_max`.
+
+If sensor topics are absent, first confirm simulation time is advancing and that
+the selected SDF contains both `gz-sim-sensors-system` and
+`gz-sim-imu-system`. If Ogre2 cannot initialize on a headless host, run on a
+host with a working EGL / OpenGL setup; forced software rendering is
+driver-dependent and is not enabled by the launch. If TF is absent, ensure only this launch owns
+`robot_state_publisher` and that `/joint_states` is active. To inspect bridge
+types and QoS:
+
+```bash
+ros2 topic info -v /scan
+ros2 topic info -v /imu/data
+ros2 topic echo /clock --once
+```
+
+The sensor and world contract tests run with:
+
+```bash
+colcon test --packages-select \
+  mobile_base_description mobile_base_gazebo mobile_base_bringup
+colcon test-result --verbose
+```
+
+## Phase 1 state estimation
+
+The Phase 1 local-state architecture is:
+
+```text
+Gazebo model state ──> identity selector ──> evaluation only
+
+/mobile_base_controller/odometry (wheel twist)
+                         +
+/imu/data (yaw rate)
+                         |
+                         v
+             robot_localization EKF
+                         |
+                         v
+              /odometry/filtered
+              odom -> base_footprint
+```
+
+Gazebo ground truth never feeds the controller, EKF, TF, SLAM, or navigation.
+`mobile_base_evaluation/ground_truth_selector` subscribes directly to Gazebo
+Transport and selects the configured model by name before publishing one
+`PoseStamped`. Entity ordering is therefore irrelevant.
+
+In the default `localization:=true` mode, `ekf_filter_node` is the sole
+publisher of `odom -> base_footprint`; the mecanum controller still publishes
+raw odometry but has `enable_odom_tf:=false`. `robot_state_publisher` owns
+`base_footprint -> base_link` and all link/sensor transforms. In
+`localization:=false` diagnostic mode, the EKF is absent and the controller
+owns `odom -> base_footprint`. Both authorities are never enabled together.
+
+The EKF uses planar mode and fuses wheel-odometry body-frame `vx`, `vy`, and
+yaw rate with IMU yaw rate. It deliberately excludes wheel pose, IMU
+orientation, linear acceleration, Z, roll, pitch, and Gazebo ground truth.
+The controller covariance is constant and direction-independent, with lower
+confidence assigned to mecanum lateral velocity than forward velocity.
+Covariance expresses uncertainty; it does not change physical wheel slip.
+
+Simulation with EKF:
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py \
+  world:=sensor_test localization:=true rviz:=true
+```
+
+Raw-controller diagnostic mode:
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py \
+  world:=empty localization:=false rviz:=true
+```
+
+## Raw and filtered odometry evaluation
+
+`mobile_base_tools` compares Gazebo ground truth, raw controller odometry, and
+`/odometry/filtered`. It samples the latest fresh pose from all three sources,
+records source timestamps, and rejects excessive skew or stale data.
+
+The simulated LiDAR maximum range is `4.0 m`. Its `/scan` topic, `lidar_link`
+frame, 720 samples, 360-degree field of view, 10 Hz update rate, minimum range,
+resolution, and noise remain unchanged.
+
+Build and source the workspace:
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --event-handlers console_direct+
+source install/setup.bash
+```
+
+Run one forward test once:
+
+```bash
+ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
+  test_profile:=forward_1m repetitions:=1 \
+  output_dir:=/tmp/phase1_results/fused_comparison
+```
+
+Run all 11 profiles with the default five repetitions:
+
+```bash
+ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
+  test_profile:=all repetitions:=0 \
+  output_dir:=/tmp/phase1_results/fused_comparison
+```
+
+Preserve a controller-only baseline separately:
+
+```bash
+ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
+  test_profile:=all repetitions:=0 \
+  evaluation_mode:=raw_only localization:=false \
+  output_dir:=/tmp/phase1_results/raw_baseline
+```
+
+Use an explicit writable output directory for retained evidence; the fallback
+is `/tmp/mobile_base_phase1`, never a hardcoded workspace source path. The
+launch defaults to the flat `empty` world, `evaluation_mode:=raw_and_filtered`,
+`localization:=true`, `gui:=false`, and `rviz:=false`. For a preserved raw-only
+baseline, use `evaluation_mode:=raw_only localization:=false`. Other arguments
+are `world`, `config_file`, `robot_entity`, `shutdown_on_complete`, `gui`, and
+`rviz`. Profiles and safe velocities are defined in
+`mobile_base_tools/config/odometry_tests.yaml`; `repetitions:=0` uses the
+five-repetition YAML value.
+
+Generated evaluation outputs are intentionally ignored under
+`odometry_results/` and `phase1_results/`. No complete authoritative Phase 1
+result set is currently tracked. To regenerate one, run the all-profile command
+above with an explicit output directory, then retain only reviewed summary
+files and a small set of aggregate plots if repository evidence is desired;
+per-run trajectories and repetitive plots should remain local.
+
+Each repetition publishes zero velocity, verifies measured velocity is below
+threshold, resets the named Gazebo model through `/world/empty/set_pose`,
+verifies the identity-selected pose reaches configurable position/yaw
+tolerances, settles, and records fresh relative initial poses. Single and
+multi-segment runs have explicit `profile_timeout`; square segments additionally
+have `segment_timeout`. All failure paths send repeated zero commands.
+
+The selected output directory contains:
+
+```text
+summary.json
+summary.csv
+runs.csv
+trajectories/<profile>_run_<number>.csv
+plots/<profile>_run_<number>.png
+plots/position_error_comparison.png
+plots/yaw_error_comparison.png
+plots/cross_axis_drift_comparison.png
+plots/repeatability_spread.png
+plots/final_displacement_comparison.png
+plots/square_path_closure.png
+plots/raw_vs_filtered_position_error.png
+plots/raw_vs_filtered_yaw_error.png
+plots/raw_vs_filtered_path_length_error.png
+plots/filtered_repeatability_spread.png
+plots/motion_end_vs_settled_overshoot.png
+plots/per_profile_improvement.png
+```
+
+Position error is the Euclidean difference between final odometry and Gazebo
+displacements. Yaw error compares normalized heading changes.
+Cross-axis drift is unintended lateral motion during forward/backward tests,
+unintended longitudinal motion during strafing, or cross-track error during
+diagonal motion. Path-length error compares accumulated odometry and Gazebo
+path lengths. Mean, median, minimum, maximum, and standard deviation quantify
+repeatability across successful repetitions; failed runs remain listed.
+Motion-end poses are captured when the nonzero command stops, while
+settled-final poses are captured after repeated zero commands and settling.
+Improvement values are raw error minus filtered error, so positive is better.
+The report labels filtered position performance as better, similar, or worse.
+
+Gazebo model pose is evaluation-only. Never use it as robot odometry or as
+input to localization, sensor fusion, SLAM, navigation, or TF publication.
+
+Troubleshooting:
+
+- No ground-truth pose: confirm the `empty` world is running and
+  `ground_truth_selector` reports that it selected `mobile_base` from
+  `/world/empty/dynamic_pose/info`.
+- Wrong robot entity: keep `robot_entity:=mobile_base`, matching the simulation
+  spawn name, and use the deterministic world with one dynamic model.
+- Controller inactive: check
+  `ros2 control list_controllers`; `mobile_base_controller` must be active.
+- Robot does not stop: inspect competing publishers on
+  `/mobile_base_controller/reference`; the evaluator aborts if measured twist
+  remains above its stop threshold.
+- Output directory not writable: choose an absolute writable `output_dir`.
+- Plots unavailable: install the `python3-matplotlib` rosdep and use the
+  non-interactive backend configured by the evaluator.
+- Stale simulation time: verify `ros2 topic echo /clock --once`; all evaluation
+  nodes use simulation time.
+- Timeout before completing motion: check for collisions, inactive control, or
+  stale Gazebo pose data before increasing a YAML timeout.
+- Reset service unavailable: verify `/world/empty/set_pose` is present and has
+  type `ros_gz_interfaces/srv/SetEntityPose`.
+- Missing samples in a report: inspect zero, stale, non-finite, or
+  nonmonotonic timestamps in the evaluator log.
+
+The EKF does not correct the physical trajectory or eliminate wheel slip. IMU
+yaw rate principally improves angular-state observability and orientation
+consistency; planar position may still drift because no absolute XY position
+sensor is fused. Phase 1 provides no autonomous navigation. The next phase is
+SLAM Toolbox mapping, saved-map localization, and Nav2 point-to-point
+navigation.
+
+## Teleoperation
+
+The Jazzy `mecanum_drive_controller` accepts stamped velocity commands on
+`/mobile_base_controller/reference`.
+
+Install runtime dependencies with rosdep:
+
+```bash
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
+```
+
+Run keyboard teleop in a separate terminal because it needs direct keyboard focus:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -p stamped:=true \
+  -p frame_id:=base_link \
+  -p speed:=0.15 \
+  -p turn:=0.5 \
+  -p use_sim_time:=true \
+  -r cmd_vel:=/mobile_base_controller/reference
+```
+
+Use `i`/`,` for forward/reverse. Lowercase `j`/`l` rotate the robot in place.
+Do not use lowercase `u`/`o`/`m`/`.` for mecanum diagonals; those keys intentionally
+combine forward/backward motion with rotation.
+
+For holonomic movement, hold Shift:
+
+| Key | Motion | Expected powered diagonal pair |
+| --- | --- | --- |
+| `J` | Strafe left | all wheels |
+| `L` | Strafe right | all wheels |
+| `U` | Forward-left | front-right and rear-left |
+| `O` | Forward-right | front-left and rear-right |
+| `M` | Backward-left | front-left and rear-right, opposite direction |
+| `>` | Backward-right | front-right and rear-left, opposite direction |
+
+Any unmapped key sends a stop command; `Ctrl-C` exits the teleop node. For hardware,
+keep the same stamped command path but set `use_sim_time:=false`.
+
+The teleop `frame_id` is `base_link` because the controller command is a body-frame
+twist. Odometry TF is published as `odom -> base_footprint`, while the URDF keeps the
+fixed `base_footprint -> base_link` transform.
+
+Forward:
+
+```bash
+ros2 topic pub /mobile_base_controller/reference geometry_msgs/msg/TwistStamped "{header: {frame_id: base_link}, twist: {linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {z: 0.0}}}"
+```
+
+Strafe:
+
+```bash
+ros2 topic pub /mobile_base_controller/reference geometry_msgs/msg/TwistStamped "{header: {frame_id: base_link}, twist: {linear: {x: 0.0, y: 0.2, z: 0.0}, angular: {z: 0.0}}}"
+```
+
+Rotate:
+
+```bash
+ros2 topic pub /mobile_base_controller/reference geometry_msgs/msg/TwistStamped "{header: {frame_id: base_link}, twist: {linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {z: 0.5}}}"
+```
+
+The controller timeout remains `reference_timeout: 0.5`, so the robot stops if fresh
+commands stop arriving. The installed Jazzy `mecanum_drive_controller` parameter
+schema does not expose body velocity or acceleration limiter fields for `linear.x`,
+`linear.y`, or `angular.z`; conservative teleop defaults are therefore documented
+above, and hardware motion limits still need calibration before physical testing.
+
+No Gazebo velocity bridge, mux, smoother, or external trajectory server is included in
+this patch. Future Nav2, SLAM, localization, joystick, or autonomy sources should feed
+a mux/safety layer first, then publish to `/mobile_base_controller/reference`. Future
+localization owns `map -> odom`; the base controller owns only `odom -> base_footprint`.
+
+## Open-loop motion test
+
+With the simulation running, execute the repeatable mecanum visual check in another
+terminal:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 run mobile_base_tools mecanum_motion_test --ros-args -p use_sim_time:=true
+```
+
+It publishes stamped body-frame commands to `/mobile_base_controller/reference` and
+runs a 1 m square, a four-direction diagonal diamond, then +90/-180/+90 degree
+rotations. Defaults are `speed:=0.15`, `side_length:=1.0`,
+`angular_speed:=0.35`, `publish_rate:=20.0`, `settle_duration:=3.0`,
+`pause_duration:=2.0`, `final_stop_duration:=5.0`, and `repeat:=false`. Override them
+with normal ROS parameters. `Ctrl-C` sends an emergency zero command.
+
+This is timed open-loop motion without odometry or sensor feedback, so geometric
+drift is expected. The Phase 1 EKF runs independently and estimates the motion;
+it does not feed back into this command generator.
+
+For physical validation, use low commands and compare the actual Gazebo model pose
+before and after each command; controller odometry alone is not proof of motion:
+
+```bash
+gz topic -l
+timeout 4s ros2 topic pub -r 20 \
+  /mobile_base_controller/reference geometry_msgs/msg/TwistStamped \
+  "{header: {frame_id: base_link}, twist: {linear: {x: 0.08}}}"
+timeout 4s ros2 topic pub -r 20 \
+  /mobile_base_controller/reference geometry_msgs/msg/TwistStamped \
+  "{header: {frame_id: base_link}, twist: {linear: {y: 0.06}}}"
+timeout 4s ros2 topic pub -r 20 \
+  /mobile_base_controller/reference geometry_msgs/msg/TwistStamped \
+  "{header: {frame_id: base_link}, twist: {angular: {z: 0.25}}}"
+ros2 topic pub --once /mobile_base_controller/reference \
+  geometry_msgs/msg/TwistStamped \
+  "{header: {frame_id: base_link}, twist: {}}"
+```
+
+Check forward, reverse, both strafes, both rotations, and all four diagonal
+combinations. Confirm the corresponding Gazebo pose changes, the driven-wheel sign
+pattern, and passive roller velocity in `/joint_states`.
+
+## Stable interfaces
+
+- Command: `/mobile_base_controller/reference` (`geometry_msgs/msg/TwistStamped`)
+- Odometry: `/mobile_base_controller/odometry`
+- Joint states: `/joint_states`
+- TF: `odom -> base_footprint -> base_link`
+
+Wheel joint names are coupled to `mobile_base_bringup/config/controllers.yaml` and
+`mobile_base.ros2_control.xacro`. Do not rename these without updating both files and
+retesting Gazebo movement:
+
+- `front_left_wheel_joint`
+- `front_right_wheel_joint`
+- `rear_right_wheel_joint`
+- `rear_left_wheel_joint`
+
+The explicit primitive roller collisions are suitable for controller and integration
+development. Detailed roller mesh collision remains intentionally out of scope unless
+measured cylinder-contact limitations justify its performance cost.
+Accurate mecanum ground interaction eventually requires modeled rollers or calibrated
+anisotropic contact parameters for the selected Gazebo physics engine.

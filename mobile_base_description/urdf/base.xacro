@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mobile_base_assembly" params="prefix">
+    <xacro:mobile_base_chassis prefix="${prefix}"/>
+
+    <!-- Wheel joint names are coupled to ros2_control and controller YAML. -->
+    <xacro:mecanum_wheel prefix="${prefix}" name="front_left"
+                          x="${wheelbase / 2.0}" y="${wheel_separation / 2.0}"
+                          z="${wheel_z}" parent="base_link"
+                          roller_handedness="-1"
+                          roller_phase="0.22193969"
+                          roller_axial_offset="-0.00059729"
+                          mesh="mecanum_wheel_FL.stl"
+                          visual_xyz="0.105356784 0.000987069 0.084068176"
+                          visual_rpy="${-pi / 2.0} -0.44387938 0"/>
+
+    <xacro:mecanum_wheel prefix="${prefix}" name="front_right"
+                          x="${wheelbase / 2.0}" y="${-wheel_separation / 2.0}"
+                          z="${wheel_z}" parent="base_link"
+                          roller_handedness="1"
+                          roller_phase="0.48030419"
+                          roller_axial_offset="0.00059729"
+                          mesh="mecanum_wheel_FR.stl"
+                          visual_xyz="0.050182544 0.126865288 0.125047948"
+                          visual_rpy="${-pi / 2.0} -0.96060838 0"/>
+
+    <xacro:mecanum_wheel prefix="${prefix}" name="rear_right"
+                          x="${-wheelbase / 2.0}" y="${-wheel_separation / 2.0}"
+                          z="${wheel_z}" parent="base_link"
+                          roller_handedness="-1"
+                          roller_phase="0.19668582"
+                          roller_axial_offset="0.00059729"
+                          mesh="mecanum_wheel_RR.stl"
+                          visual_xyz="-0.030863306 0.126451466 0.020233040"
+                          visual_rpy="${-pi / 2.0} -0.39337164 0"/>
+
+    <xacro:mecanum_wheel prefix="${prefix}" name="rear_left"
+                          x="${-wheelbase / 2.0}" y="${wheel_separation / 2.0}"
+                          z="${wheel_z}" parent="base_link"
+                          roller_handedness="1"
+                          roller_phase="0.24790784"
+                          roller_axial_offset="-0.00059729"
+                          mesh="mecanum_wheel_RL.stl"
+                          visual_xyz="-0.032786922 0.001235564 0.016969848"
+                          visual_rpy="${-pi / 2.0} -0.49581568 0"/>
+  </xacro:macro>
+</robot>

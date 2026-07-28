@@ -1,0 +1,3 @@
+# Keep generated Phase 1 reports local while retaining this directory.
+*
+!.gitignore

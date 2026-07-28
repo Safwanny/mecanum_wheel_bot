@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mobile_base_imu" params="prefix">
+    <link name="${prefix}imu_link">
+      <visual>
+        <geometry>
+          <box size="${imu_length} ${imu_width} ${imu_height}"/>
+        </geometry>
+        <material name="electronics_green"/>
+      </visual>
+      <collision>
+        <geometry>
+          <box size="${imu_length} ${imu_width} ${imu_height}"/>
+        </geometry>
+      </collision>
+      <xacro:box_inertial mass="${imu_mass}"
+                          x="${imu_length}" y="${imu_width}" z="${imu_height}">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </xacro:box_inertial>
+    </link>
+
+    <joint name="${prefix}base_link_to_imu_link_joint" type="fixed">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}imu_link"/>
+      <origin xyz="${imu_x} ${imu_y} ${imu_z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

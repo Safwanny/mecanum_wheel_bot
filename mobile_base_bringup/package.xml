@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mobile_base_bringup</name>
+  <version>0.1.0</version>
+  <description>Controller configuration and top-level launch files for the mecanum base.</description>
+  <maintainer email="safwan@example.com">Safwan</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>gz_sim_vendor</exec_depend>
+  <exec_depend>gz_transport_vendor</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>mecanum_drive_controller</exec_depend>
+  <exec_depend>mobile_base_description</exec_depend>
+  <exec_depend>mobile_base_evaluation</exec_depend>
+  <exec_depend>mobile_base_gazebo</exec_depend>
+  <exec_depend>mobile_base_localization</exec_depend>
+  <exec_depend>mobile_base_tools</exec_depend>
+  <exec_depend>gz_ros2_control</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>nav_msgs</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>rcl_interfaces</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>tf2_msgs</test_depend>
+
+  <export><build_type>ament_cmake</build_type></export>
+</package>

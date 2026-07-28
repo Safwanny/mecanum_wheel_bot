@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mobile_base_lidar_gazebo" params="prefix">
+    <gazebo reference="${prefix}lidar_link">
+      <sensor name="${prefix}lidar" type="gpu_lidar">
+        <always_on>true</always_on>
+        <update_rate>${lidar_update_rate}</update_rate>
+        <visualize>false</visualize>
+        <topic>/scan</topic>
+        <gz_frame_id>${prefix}lidar_link</gz_frame_id>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>${lidar_samples}</samples>
+              <resolution>1</resolution>
+              <min_angle>${lidar_min_angle}</min_angle>
+              <max_angle>${lidar_max_angle}</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>1</samples>
+              <resolution>1</resolution>
+              <min_angle>0.0</min_angle>
+              <max_angle>0.0</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>${lidar_min_range}</min>
+            <max>${lidar_max_range}</max>
+            <resolution>${lidar_range_resolution}</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>${lidar_noise_mean}</mean>
+            <stddev>${lidar_noise_stddev}</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>

@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Recursively generate a physical roller ring. The child link's local Z axis
+    is aligned with the roller axis, so its joint, collision, and inertia all
+    share the same frame.
+  -->
+  <xacro:macro name="mecanum_roller_ring"
+               params="prefix wheel_name roller_handedness roller_phase
+                       roller_axial_offset index:=0">
+    <xacro:if value="${index &lt; roller_count}">
+      <xacro:property name="theta"
+                      value="${roller_phase + index * 2.0 * pi / roller_count}"/>
+      <xacro:property name="roller_x"
+                      value="${roller_center_radius * cos(theta)}"/>
+      <xacro:property name="roller_z"
+                      value="${roller_center_radius * sin(theta)}"/>
+      <xacro:property name="axis_dx"
+                      value="${-roller_handedness * sin(roller_inclination) * sin(theta)}"/>
+      <xacro:property name="axis_dy"
+                      value="${cos(roller_inclination)}"/>
+      <xacro:property name="axis_dz"
+                      value="${roller_handedness * sin(roller_inclination) * cos(theta)}"/>
+      <xacro:property name="roller_yaw" value="${atan2(axis_dy, axis_dx)}"/>
+      <xacro:property name="roller_pitch"
+                      value="${atan2(sqrt(axis_dx * axis_dx + axis_dy * axis_dy), axis_dz)}"/>
+
+      <link name="${prefix}${wheel_name}_roller_${index}_link">
+        <collision>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <cylinder radius="${roller_radius}" length="${roller_length}"/>
+          </geometry>
+        </collision>
+        <xacro:cylinder_inertial mass="${roller_mass}"
+                                 radius="${roller_radius}"
+                                 length="${roller_length}">
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:cylinder_inertial>
+      </link>
+
+      <joint name="${prefix}${wheel_name}_roller_${index}_joint"
+             type="continuous">
+        <parent link="${prefix}${wheel_name}_wheel_link"/>
+        <child link="${prefix}${wheel_name}_roller_${index}_link"/>
+        <origin xyz="${roller_x} ${roller_axial_offset} ${roller_z}"
+                rpy="0 ${roller_pitch} ${roller_yaw}"/>
+        <axis xyz="0 0 1"/>
+        <dynamics damping="${roller_joint_damping}"
+                  friction="${roller_joint_friction}"/>
+      </joint>
+
+      <gazebo reference="${prefix}${wheel_name}_roller_${index}_link">
+        <mu1>${roller_contact_mu}</mu1>
+        <mu2>${roller_contact_mu}</mu2>
+        <kp>${roller_contact_kp}</kp>
+        <kd>${roller_contact_kd}</kd>
+        <selfCollide>false</selfCollide>
+      </gazebo>
+
+      <xacro:mecanum_roller_ring
+        prefix="${prefix}"
+        wheel_name="${wheel_name}"
+        roller_handedness="${roller_handedness}"
+        roller_phase="${roller_phase}"
+        roller_axial_offset="${roller_axial_offset}"
+        index="${index + 1}"/>
+    </xacro:if>
+  </xacro:macro>
+</robot>

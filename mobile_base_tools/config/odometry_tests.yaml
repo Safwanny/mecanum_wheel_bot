@@ -1,0 +1,111 @@
+profiles:
+  forward_1m:
+    kind: longitudinal
+    command: {linear_x: 0.10, linear_y: 0.00, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  backward_1m:
+    kind: longitudinal
+    command: {linear_x: -0.10, linear_y: 0.00, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  strafe_left_1m:
+    kind: lateral
+    command: {linear_x: 0.00, linear_y: 0.10, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  strafe_right_1m:
+    kind: lateral
+    command: {linear_x: 0.00, linear_y: -0.10, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  rotate_positive_90deg:
+    kind: rotation
+    command: {linear_x: 0.00, linear_y: 0.00, angular_z: 0.30}
+    termination: {type: ground_truth_rotation, target: 1.5707963267948966}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  rotate_negative_90deg:
+    kind: rotation
+    command: {linear_x: 0.00, linear_y: 0.00, angular_z: -0.30}
+    termination: {type: ground_truth_rotation, target: 1.5707963267948966}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  diagonal_forward_left:
+    kind: diagonal
+    command: {linear_x: 0.07, linear_y: 0.07, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  diagonal_forward_right:
+    kind: diagonal
+    command: {linear_x: 0.07, linear_y: -0.07, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  diagonal_backward_left:
+    kind: diagonal
+    command: {linear_x: -0.07, linear_y: 0.07, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  diagonal_backward_right:
+    kind: diagonal
+    command: {linear_x: -0.07, linear_y: -0.07, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 1.00}
+    profile_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+
+  square_1m:
+    kind: square
+    profile_timeout: 90.0
+    segment_timeout: 20.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 5
+    segments:
+      - name: forward
+        command: {linear_x: 0.10, linear_y: 0.00, angular_z: 0.00}
+        termination: {type: ground_truth_translation, target: 1.00}
+      - name: left
+        command: {linear_x: 0.00, linear_y: 0.10, angular_z: 0.00}
+        termination: {type: ground_truth_translation, target: 1.00}
+      - name: backward
+        command: {linear_x: -0.10, linear_y: 0.00, angular_z: 0.00}
+        termination: {type: ground_truth_translation, target: 1.00}
+      - name: right
+        command: {linear_x: 0.00, linear_y: -0.10, angular_z: 0.00}
+        termination: {type: ground_truth_translation, target: 1.00}

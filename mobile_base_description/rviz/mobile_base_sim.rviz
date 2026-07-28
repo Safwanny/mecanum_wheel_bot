@@ -1,0 +1,132 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Cell Size: 0.05
+      Plane Cell Count: 40
+      Name: Grid
+      Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+      Name: Robot Model
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/LaserScan
+      Color: 255; 80; 40
+      Color Transformer: FlatColor
+      Decay Time: 0.25
+      Enabled: true
+      Name: LiDAR Scan
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.01
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /scan
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: false
+      Keep: 1
+      Name: Raw Wheel Odometry
+      Shape: Axes
+      Topic:
+        Value: /mobile_base_controller/odometry
+      Value: true
+    - Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: true
+      Keep: 1
+      Name: Filtered Odometry
+      Shape: Axes
+      Topic:
+        Value: /odometry/filtered
+      Value: true
+    - Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 255; 255
+      Enabled: true
+      Line Style: Lines
+      Line Width: 0.03
+      Name: Raw Wheel Trajectory
+      Pose Style: None
+      Topic:
+        Value: /mobile_base/trajectory
+      Value: true
+    - Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 255; 220; 0
+      Enabled: true
+      Line Style: Lines
+      Line Width: 0.03
+      Name: Filtered Trajectory
+      Pose Style: None
+      Topic:
+        Value: /mobile_base/filtered_trajectory
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Front Camera
+      Normalize Range: true
+      Topic:
+        Value: /camera/image_raw
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 36; 38; 42
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 0.8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.06
+      Name: Odom Trajectory View
+      Near Clip Distance: 0.005
+      Pitch: 0.65
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.75
+    Saved: ~
+Window Geometry:
+  Height: 800
+  Width: 1200

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mobile_base_camera_gazebo" params="prefix">
+    <gazebo reference="${prefix}camera_link">
+      <sensor name="${prefix}camera" type="camera">
+        <always_on>true</always_on>
+        <update_rate>${camera_update_rate}</update_rate>
+        <visualize>false</visualize>
+        <topic>/camera/image_raw</topic>
+        <camera>
+          <horizontal_fov>${camera_horizontal_fov}</horizontal_fov>
+          <image>
+            <width>${camera_image_width}</width>
+            <height>${camera_image_height}</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>${camera_clip_near}</near>
+            <far>${camera_clip_far}</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>${camera_noise_mean}</mean>
+            <stddev>${camera_noise_stddev}</stddev>
+          </noise>
+          <optical_frame_id>${prefix}camera_optical_frame</optical_frame_id>
+          <camera_info_topic>/camera/camera_info</camera_info_topic>
+        </camera>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>

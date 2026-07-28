@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mobile_base_lidar" params="prefix">
+    <link name="${prefix}lidar_link">
+      <visual>
+        <origin xyz="0 0 ${-lidar_height / 2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+        </geometry>
+        <material name="sensor_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-lidar_height / 2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertial mass="${lidar_mass}"
+                               radius="${lidar_radius}"
+                               length="${lidar_height}">
+        <origin xyz="0 0 ${-lidar_height / 2.0}" rpy="0 0 0"/>
+      </xacro:cylinder_inertial>
+    </link>
+
+    <joint name="${prefix}base_link_to_lidar_link_joint" type="fixed">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}lidar_link"/>
+      <origin xyz="${lidar_x} ${lidar_y} ${lidar_z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mobile_base_camera" params="prefix">
+    <link name="${prefix}camera_link">
+      <visual>
+        <geometry>
+          <box size="${camera_depth} ${camera_width} ${camera_height}"/>
+        </geometry>
+        <material name="sensor_grey"/>
+      </visual>
+      <collision>
+        <geometry>
+          <box size="${camera_depth} ${camera_width} ${camera_height}"/>
+        </geometry>
+      </collision>
+      <xacro:box_inertial mass="${camera_mass}"
+                          x="${camera_depth}" y="${camera_width}" z="${camera_height}">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </xacro:box_inertial>
+    </link>
+
+    <joint name="${prefix}base_link_to_camera_link_joint" type="fixed">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}camera_link"/>
+      <origin xyz="${chassis_length / 2.0 + camera_depth / 2.0} 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${prefix}camera_optical_frame"/>
+    <joint name="${prefix}camera_link_to_camera_optical_frame_joint" type="fixed">
+      <parent link="${prefix}camera_link"/>
+      <child link="${prefix}camera_optical_frame"/>
+      <origin xyz="${camera_depth / 2.0} 0 0" rpy="${-pi / 2.0} 0 ${-pi / 2.0}"/>
+    </joint>
+  </xacro:macro>
+</robot>

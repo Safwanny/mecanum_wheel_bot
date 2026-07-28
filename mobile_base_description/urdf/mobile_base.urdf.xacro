@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<robot name="mobile_base" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="prefix" default=""/>
+  <xacro:arg name="use_gazebo" default="false"/>
+  <xacro:arg name="controllers_file" default=""/>
+
+  <xacro:include filename="materials.xacro"/>
+  <xacro:include filename="inertials.xacro"/>
+  <xacro:include filename="properties.xacro"/>
+  <xacro:include filename="chassis.xacro"/>
+  <xacro:include filename="macros/mecanum_rollers.xacro"/>
+  <xacro:include filename="macros/mecanum_wheels.xacro"/>
+  <xacro:include filename="base.xacro"/>
+  <xacro:include filename="camera.xacro"/>
+  <xacro:include filename="lidar.xacro"/>
+  <xacro:include filename="imu.xacro"/>
+  <xacro:include filename="mobile_base.ros2_control.xacro"/>
+  <xacro:include filename="mobile_base.gazebo.xacro"/>
+  <xacro:include filename="camera.gazebo.xacro"/>
+  <xacro:include filename="lidar.gazebo.xacro"/>
+  <xacro:include filename="imu.gazebo.xacro"/>
+
+  <xacro:mobile_base_assembly prefix="$(arg prefix)"/>
+  <xacro:mobile_base_camera prefix="$(arg prefix)"/>
+  <xacro:mobile_base_lidar prefix="$(arg prefix)"/>
+  <xacro:mobile_base_imu prefix="$(arg prefix)"/>
+
+  <xacro:mobile_base_ros2_control
+    prefix="$(arg prefix)"
+    use_gazebo="$(arg use_gazebo)"
+    controllers_file="$(arg controllers_file)"/>
+
+  <xacro:if value="$(arg use_gazebo)">
+    <xacro:mobile_base_gazebo controllers_file="$(arg controllers_file)"/>
+    <xacro:mobile_base_camera_gazebo prefix="$(arg prefix)"/>
+    <xacro:mobile_base_lidar_gazebo prefix="$(arg prefix)"/>
+    <xacro:mobile_base_imu_gazebo prefix="$(arg prefix)"/>
+  </xacro:if>
+</robot>

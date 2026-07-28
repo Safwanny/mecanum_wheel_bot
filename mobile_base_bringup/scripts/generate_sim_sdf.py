@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+
+# Copyright 2026 Safwan
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import argparse
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
+
+from ament_index_python.packages import get_package_share_directory
+
+
+WHEEL_URI_PREFIXES = (
+    'package://mobile_base_description/meshes/wheels/',
+    'package://mobile_base/meshes/wheels/',
+    'model://mobile_base/meshes/wheels/',
+    'model://mobile_base_description/meshes/wheels/',
+)
+WHEEL_FILES = {
+    'mecanum_wheel_FL.stl',
+    'mecanum_wheel_FR.stl',
+    'mecanum_wheel_RL.stl',
+    'mecanum_wheel_RR.stl',
+}
+WHEEL_NAMES = ('front_left', 'front_right', 'rear_right', 'rear_left')
+ROLLER_LINK = re.compile(
+    r'^(front_left|front_right|rear_right|rear_left)_roller_([0-9]+)_link$'
+)
+ROLLER_JOINT = re.compile(
+    r'^(front_left|front_right|rear_right|rear_left)_roller_([0-9]+)_joint$'
+)
+
+
+def _wheel_file_uris():
+    share = Path(get_package_share_directory('mobile_base_description'))
+    wheels = share / 'meshes' / 'wheels'
+    missing = sorted(name for name in WHEEL_FILES if not (wheels / name).is_file())
+    if missing:
+        raise RuntimeError(
+            'Missing installed wheel meshes: ' + ', '.join(missing)
+        )
+    return {name: (wheels / name).resolve().as_uri() for name in WHEEL_FILES}
+
+
+def _validated_named_elements(root, tag, pattern):
+    elements = {}
+    for element in root.findall('.//' + tag):
+        name = element.attrib.get('name', '')
+        match = pattern.fullmatch(name)
+        if match:
+            if name in elements:
+                raise RuntimeError('Duplicate roller name in SDF: ' + name)
+            elements[name] = element
+    return elements
+
+
+def _validate_explicit_rollers(root):
+    driven_joint_names = {name + '_wheel_joint' for name in WHEEL_NAMES}
+    driven_joints = [
+        joint.attrib.get('name') for joint in root.findall('.//joint')
+        if joint.attrib.get('name') in driven_joint_names
+    ]
+    if len(driven_joints) != 4 or set(driven_joints) != driven_joint_names:
+        missing = sorted(driven_joint_names - set(driven_joints))
+        raise RuntimeError(
+            'Expected four driven wheel joints; missing: '
+            + ', '.join(missing)
+        )
+
+    roller_links = _validated_named_elements(root, 'link', ROLLER_LINK)
+    roller_joints = _validated_named_elements(root, 'joint', ROLLER_JOINT)
+    if len(roller_links) != 40:
+        raise RuntimeError(
+            f'Expected 40 roller links, found {len(roller_links)}'
+        )
+    if len(roller_joints) != 40:
+        raise RuntimeError(
+            f'Expected 40 roller joints, found {len(roller_joints)}'
+        )
+
+    for wheel_name in WHEEL_NAMES:
+        expected_links = {
+            f'{wheel_name}_roller_{index}_link' for index in range(10)
+        }
+        expected_joints = {
+            f'{wheel_name}_roller_{index}_joint' for index in range(10)
+        }
+        actual_links = {
+            name for name in roller_links
+            if name.startswith(wheel_name + '_roller_')
+        }
+        actual_joints = {
+            name for name in roller_joints
+            if name.startswith(wheel_name + '_roller_')
+        }
+        if actual_links != expected_links:
+            raise RuntimeError(
+                f'{wheel_name} must have exactly roller links 0 through 9'
+            )
+        if actual_joints != expected_joints:
+            raise RuntimeError(
+                f'{wheel_name} must have exactly roller joints 0 through 9'
+            )
+        for index in range(10):
+            joint_name = f'{wheel_name}_roller_{index}_joint'
+            joint = roller_joints[joint_name]
+            parent = joint.findtext('parent')
+            child = joint.findtext('child')
+            if parent != wheel_name + '_wheel_link':
+                raise RuntimeError(
+                    f'Roller joint {joint_name} has invalid parent {parent}'
+                )
+            if child != f'{wheel_name}_roller_{index}_link':
+                raise RuntimeError(
+                    f'Roller joint {joint_name} has invalid child {child}'
+                )
+
+    collision_count = 0
+    for name, link in roller_links.items():
+        collisions = link.findall('collision')
+        if len(collisions) != 1:
+            raise RuntimeError(
+                f'Roller link {name} must have exactly one collision; '
+                f'found {len(collisions)}'
+            )
+        collision_count += len(collisions)
+    if collision_count != 40:
+        raise RuntimeError(
+            f'Expected 40 roller collisions, found {collision_count}'
+        )
+
+    friction_directions = root.findall('.//fdir1')
+    if friction_directions:
+        raise RuntimeError(
+            f'Explicit roller SDF must contain no fdir1 elements; '
+            f'found {len(friction_directions)}'
+        )
+
+
+def main():
+    """Generate and validate Gazebo SDF with 40 explicit passive rollers."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--xacro', required=True)
+    parser.add_argument('--controllers', required=True)
+    parser.add_argument('--output', required=True)
+    args = parser.parse_args()
+
+    urdf = subprocess.run(
+        [
+            'xacro',
+            args.xacro,
+            'use_gazebo:=true',
+            'controllers_file:=' + args.controllers,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.urdf') as urdf_file:
+        urdf_file.write(urdf)
+        urdf_file.flush()
+        sdf = subprocess.run(
+            ['gz', 'sdf', '-p', urdf_file.name],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    root = ET.fromstring(sdf)
+    wheel_file_uris = _wheel_file_uris()
+    referenced_wheel_files = []
+    for uri in root.findall('.//uri'):
+        for prefix in WHEEL_URI_PREFIXES:
+            if uri.text and uri.text.startswith(prefix):
+                mesh_name = uri.text[len(prefix):]
+                if mesh_name not in wheel_file_uris:
+                    raise RuntimeError(
+                        'Unresolved wheel visual URI: ' + uri.text
+                    )
+                uri.text = wheel_file_uris[mesh_name]
+                referenced_wheel_files.append(mesh_name)
+                break
+
+    if (
+        len(referenced_wheel_files) != 4
+        or set(referenced_wheel_files) != WHEEL_FILES
+        or any(referenced_wheel_files.count(name) != 1 for name in WHEEL_FILES)
+    ):
+        missing = sorted(WHEEL_FILES - set(referenced_wheel_files))
+        raise RuntimeError(
+            'Generated SDF must reference each of the four wheel visual '
+            'meshes exactly once; missing: ' + ', '.join(missing)
+        )
+
+    for uri in root.findall('.//uri'):
+        if uri.text and any(
+                uri.text.startswith(prefix) for prefix in WHEEL_URI_PREFIXES):
+            raise RuntimeError('Unresolved wheel visual URI: ' + uri.text)
+
+    _validate_explicit_rollers(root)
+
+    ET.ElementTree(root).write(
+        args.output,
+        encoding='utf-8',
+        xml_declaration=True,
+    )
+
+
+if __name__ == '__main__':
+    main()

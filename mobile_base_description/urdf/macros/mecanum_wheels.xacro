@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="mecanum_wheel"
+               params="prefix name parent x y z mesh visual_xyz
+                       roller_handedness roller_phase roller_axial_offset
+                       visual_rpy">
+    <link name="${prefix}${name}_wheel_link">
+      <visual>
+        <origin xyz="${visual_xyz}" rpy="${visual_rpy}"/>
+        <geometry>
+          <mesh
+            filename="package://mobile_base_description/meshes/wheels/${mesh}"
+            scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="wheel_orange"/>
+      </visual>
+
+      <xacro:cylinder_inertial mass="${wheel_hub_mass}"
+                               radius="${roller_center_radius}"
+                               length="${wheel_width}">
+        <origin xyz="0 0 0" rpy="${pi / 2.0} 0 0"/>
+      </xacro:cylinder_inertial>
+    </link>
+
+    <joint name="${prefix}${name}_wheel_joint" type="continuous">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${name}_wheel_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.05" friction="0.01"/>
+      <limit effort="8.0" velocity="25.0"/>
+    </joint>
+
+    <gazebo reference="${prefix}${name}_wheel_link">
+      <selfCollide>false</selfCollide>
+    </gazebo>
+
+    <xacro:mecanum_roller_ring
+      prefix="${prefix}"
+      wheel_name="${name}"
+      roller_handedness="${roller_handedness}"
+      roller_phase="${roller_phase}"
+      roller_axial_offset="${roller_axial_offset}"/>
+  </xacro:macro>
+</robot>

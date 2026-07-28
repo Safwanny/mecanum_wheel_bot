@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="navigation_basic">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <light type="directional" name="sun">
+      <pose>0 0 10 0 0 0</pose><cast_shadows>true</cast_shadows>
+      <diffuse>0.85 0.85 0.85 1</diffuse><specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry></collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+          <material><ambient>0.60 0.60 0.60 1</ambient><diffuse>0.60 0.60 0.60 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A 10 x 8 m room. The split interior wall leaves routes around both ends. -->
+    <model name="north_wall">
+      <static>true</static><pose>0 4 0.6 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>10 0.15 1.2</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10 0.15 1.2</size></box></geometry></visual></link>
+    </model>
+    <model name="south_wall">
+      <static>true</static><pose>0 -4 0.6 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>10 0.15 1.2</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10 0.15 1.2</size></box></geometry></visual></link>
+    </model>
+    <model name="east_wall">
+      <static>true</static><pose>5 0 0.6 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.15 8 1.2</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 8 1.2</size></box></geometry></visual></link>
+    </model>
+    <model name="west_wall">
+      <static>true</static><pose>-5 0 0.6 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.15 8 1.2</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 8 1.2</size></box></geometry></visual></link>
+    </model>
+    <model name="interior_wall">
+      <static>true</static><pose>0.5 1.0 0.5 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.15 4.0 1.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.15 4.0 1.0</size></box></geometry>
+          <material><ambient>0.70 0.45 0.20 1</ambient><diffuse>0.70 0.45 0.20 1</diffuse></material>
+        </visual></link>
+    </model>
+    <model name="box_northwest">
+      <static>true</static><pose>-2.5 2.2 0.4 0 0 0.25</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.8 0.8 0.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.8 0.8 0.8</size></box></geometry></visual></link>
+    </model>
+    <model name="box_southeast">
+      <static>true</static><pose>2.5 -2.0 0.35 0 0 -0.35</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>1.0 0.7 0.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 0.7 0.7</size></box></geometry></visual></link>
+    </model>
+    <model name="center_column">
+      <static>true</static><pose>-1.2 -0.8 0.5 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry></visual></link>
+    </model>
+  </world>
+</sdf>
