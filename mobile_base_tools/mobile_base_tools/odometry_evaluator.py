@@ -1,6 +1,7 @@
 """Pure calculations for raw wheel-odometry characterization."""
 
 import math
+import random
 
 from mobile_base_tools.pose_math import (
     cross_axis_drift,
@@ -18,6 +19,107 @@ def timeout_expired(start_time, current_time, timeout):
     if timeout <= 0.0:
         raise ValueError('timeout must be positive')
     return current_time - start_time >= timeout
+
+
+def timeout_reason(
+        simulation_start, simulation_now, simulation_timeout,
+        wall_start, wall_now, wall_watchdog,
+        last_clock_advance_wall, clock_stall_timeout):
+    """Classify motion, watchdog, and stopped-clock timeouts."""
+    if simulation_now < simulation_start:
+        return 'nonmonotonic simulation time'
+    if timeout_expired(
+            last_clock_advance_wall, wall_now, clock_stall_timeout):
+        return 'clock stalled'
+    if timeout_expired(simulation_start, simulation_now, simulation_timeout):
+        return 'simulation timeout'
+    if timeout_expired(wall_start, wall_now, wall_watchdog):
+        return 'wall watchdog expired'
+    return None
+
+
+def command_progress(command, initial_pose, current_pose, target):
+    """Return Euclidean, along-track, and cross-track motion progress."""
+    delta = relative_pose(initial_pose, current_pose)
+    linear_norm = math.hypot(command.linear_x, command.linear_y)
+    if linear_norm > 0.0:
+        unit_x = command.linear_x / linear_norm
+        unit_y = command.linear_y / linear_norm
+        along = delta.x * unit_x + delta.y * unit_y
+        cross = -delta.x * unit_y + delta.y * unit_x
+        euclidean = math.hypot(delta.x, delta.y)
+        achieved = euclidean
+    else:
+        direction = 1.0 if command.angular_z >= 0.0 else -1.0
+        along = direction * delta.yaw
+        cross = math.hypot(delta.x, delta.y)
+        euclidean = cross
+        achieved = along
+    return {
+        'along_track_displacement': along,
+        'cross_track_displacement': cross,
+        'euclidean_displacement': euclidean,
+        'percentage_of_target_reached': (
+            100.0 * achieved / target if target > 0.0 else 0.0
+        ),
+    }
+
+
+def ordered_profiles(profiles, order, seed):
+    """Return configured or deterministically shuffled profile values."""
+    selected = list(profiles)
+    if order == 'configured':
+        return selected
+    if order == 'randomized':
+        random.Random(seed).shuffle(selected)
+        return selected
+    raise ValueError('order must be configured or randomized')
+
+
+def command_stamp_status(previous_stamp, current_stamp):
+    """Classify a command stamp before publication."""
+    if current_stamp <= 0.0:
+        return 'zero'
+    if previous_stamp is None:
+        return 'fresh'
+    if current_stamp < previous_stamp:
+        return 'nonmonotonic'
+    if current_stamp == previous_stamp:
+        return 'duplicate'
+    return 'fresh'
+
+
+def update_settle_window(
+        settled_since, current_simulation_time, stopped, required_duration):
+    """Advance or reset a continuous-settling interval."""
+    if required_duration <= 0.0:
+        raise ValueError('required_duration must be positive')
+    if not stopped:
+        return None, False
+    start = (
+        current_simulation_time
+        if settled_since is None else settled_since
+    )
+    return start, current_simulation_time - start >= required_duration
+
+
+def post_reset_streams_fresh(
+        ground_truth_stamp, previous_ground_truth_stamp,
+        raw_stamp, previous_raw_stamp,
+        filtered_stamp=None, previous_filtered_stamp=None,
+        require_filtered=False):
+    """Return whether required streams have advanced beyond reset."""
+    if ground_truth_stamp <= previous_ground_truth_stamp:
+        return False
+    if raw_stamp <= previous_raw_stamp:
+        return False
+    if require_filtered:
+        return (
+            filtered_stamp is not None
+            and previous_filtered_stamp is not None
+            and filtered_stamp > previous_filtered_stamp
+        )
+    return True
 
 
 def termination_reached(segment, initial_pose, current_pose):

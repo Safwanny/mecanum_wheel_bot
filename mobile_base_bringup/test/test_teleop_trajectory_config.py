@@ -52,6 +52,8 @@ def main():
     assert 'enable_odom_tf:=false' in launch
     assert 'enable_odom_tf:=true' in launch
     assert 'mobile_base_localization' in launch
+    assert "DeclareLaunchArgument('namespace'" not in launch
+    assert 'PushRosNamespace' not in launch
 
     evaluation_launch = read(
         bringup / 'launch' / 'odometry_evaluation.launch.py'

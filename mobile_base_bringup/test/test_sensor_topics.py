@@ -44,6 +44,7 @@ def generate_test_description():
             'gui': 'false',
             'rviz': 'false',
             'use_sim_time': 'true',
+            'render_engine': 'ogre',
         }.items(),
     )
     return LaunchDescription(

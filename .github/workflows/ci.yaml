@@ -1,0 +1,68 @@
+name: ROS 2 Jazzy CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  deterministic-checks:
+    runs-on: ubuntu-24.04
+    container:
+      image: ros:jazzy
+    env:
+      ROS_DISTRO: jazzy
+      ROS_LOG_DIR: /tmp/mobile_base_ci_logs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install declared dependencies
+        run: |
+          apt-get update
+          rosdep update
+          rosdep install --from-paths . --ignore-src -r -y
+
+      - name: Create isolated workspace
+        run: |
+          mkdir -p /tmp/mobile_base_ws/src
+          ln -s "$GITHUB_WORKSPACE" /tmp/mobile_base_ws/src/mobile_base
+
+      - name: Build all six packages
+        working-directory: /tmp/mobile_base_ws
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --symlink-install --packages-select \
+            mobile_base_description mobile_base_gazebo mobile_base_localization \
+            mobile_base_evaluation mobile_base_tools mobile_base_bringup
+
+      - name: Run deterministic package tests
+        working-directory: /tmp/mobile_base_ws
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --event-handlers console_cohesion+ --packages-select \
+            mobile_base_description mobile_base_gazebo mobile_base_localization \
+            mobile_base_evaluation mobile_base_tools mobile_base_bringup \
+            --ctest-args -E \
+            'test_test_sensor_topics.py|test_test_odometry_evaluation_runtime.py'
+          colcon test-result --verbose
+
+      - name: Validate bringup configuration without Gazebo runtime
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          python3 mobile_base_bringup/test/test_teleop_trajectory_config.py \
+            mobile_base_bringup mobile_base_description mobile_base_gazebo
+
+      - name: Validate Python and URDF
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          python3 -m compileall -q \
+            mobile_base_tools mobile_base_bringup mobile_base_localization \
+            mobile_base_description mobile_base_gazebo mobile_base_evaluation
+          xacro mobile_base_description/urdf/mobile_base.urdf.xacro \
+            > /tmp/mobile_base.urdf
+          check_urdf /tmp/mobile_base.urdf
+          git diff --check

@@ -1,0 +1,33 @@
+# colcon workspaces
+/build/
+/install/
+/log/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime output and retained local evidence
+/odometry_results/
+/phase1_results/
+/rosbags/
+*.db3
+*.mcap
+*.bag
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*~
+core
+core.*
+
+# Local editor and platform metadata
+.idea/
+.vscode/
+.DS_Store

@@ -151,6 +151,12 @@ def main(args=None):
         if rclpy.ok():
             raise
     finally:
-        node.destroy_node()
+        try:
+            node.destroy_node()
+        except (KeyboardInterrupt, RuntimeError):
+            pass
         if rclpy.ok():
-            rclpy.shutdown()
+            try:
+                rclpy.shutdown()
+            except KeyboardInterrupt:
+                pass

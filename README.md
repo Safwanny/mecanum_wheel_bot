@@ -9,6 +9,8 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 | `mobile_base_description` | Xacro model, SI-unit geometry, inertial data, and RViz configuration |
 | `mobile_base_gazebo` | Gazebo Harmonic world and simulator-specific assets |
 | `mobile_base_bringup` | ros2_control configuration and top-level launch files |
+| `mobile_base_localization` | Planar wheel-odometry and IMU EKF configuration |
+| `mobile_base_evaluation` | Evaluation-only, identity-selected Gazebo ground truth |
 | `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
 
 The packages are independent of the existing arm stack.
@@ -99,7 +101,8 @@ The Gazebo launch requires `ros_gz_sim`, `ros_gz_bridge`, and `gz_ros2_control`.
 ```bash
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select \
-  mobile_base_description mobile_base_gazebo mobile_base_tools mobile_base_bringup
+  mobile_base_description mobile_base_gazebo mobile_base_localization \
+  mobile_base_evaluation mobile_base_tools mobile_base_bringup
 source install/setup.bash
 xacro src/mobile_base/mobile_base_description/urdf/mobile_base.urdf.xacro > /tmp/mobile_base.urdf
 check_urdf /tmp/mobile_base.urdf
@@ -118,7 +121,9 @@ ros2 launch mobile_base_bringup simulation.launch.py
 
 `world` accepts an installed world name (with or without `.sdf`) or an absolute
 SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
-`start_controller`, `namespace`, `x`, `y`, `z`, and `yaw`.
+`start_controller`, `localization`, `render_engine`, `x`, `y`, `z`, and `yaw`.
+Phase 1 intentionally supports one un-namespaced robot. A misleading partial
+`namespace` argument was removed rather than implying multi-robot support.
 
 Wheel appearance comes from the full position-specific mecanum wheel meshes. Gazebo
 motion is physical: the controller drives four wheel joints, each wheel carries ten
@@ -241,7 +246,8 @@ their Gazebo sensor elements are enabled only by `use_gazebo:=true`.
 Both frames are fixed children of `base_link`. Gazebo publishes native
 `gz.msgs.LaserScan` and `gz.msgs.IMU`; the launch bridges them one-way into ROS.
 The world supplies the Sensors system with Ogre2 and the IMU system. No
-localization, SLAM, Nav2, or sensor fusion is started.
+The sensor definitions themselves do not add localization, SLAM, Nav2, or
+sensor fusion; the top-level simulation starts the Phase 1 EKF by default.
 
 Four self-contained worlds are installed; none downloads external models:
 
@@ -285,11 +291,18 @@ configured maximum range; finite returns must fall between `range_min` and
 
 If sensor topics are absent, first confirm simulation time is advancing and that
 the selected SDF contains both `gz-sim-sensors-system` and
-`gz-sim-imu-system`. If Ogre2 cannot initialize on a headless host, run on a
-host with a working EGL / OpenGL setup; forced software rendering is
-driver-dependent and is not enabled by the launch. If TF is absent, ensure only this launch owns
-`robot_state_publisher` and that `/joint_states` is active. To inspect bridge
-types and QoS:
+`gz-sim-imu-system`. If Ogre2 cannot initialize on a headless host, select the
+bounded Ogre software path and Mesa llvmpipe explicitly:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 ros2 launch mobile_base_bringup simulation.launch.py \
+  gui:=false rviz:=false render_engine:=ogre
+```
+
+This avoids the known Ogre2 hardware-EGL path but does not suppress kernel
+AMDGPU diagnostics. Stop validation if the documented repeated AMDGPU warning
+returns. If TF is absent, ensure only this launch owns `robot_state_publisher`
+and that `/joint_states` is active. To inspect bridge types and QoS:
 
 ```bash
 ros2 topic info -v /scan
@@ -357,6 +370,35 @@ ros2 launch mobile_base_bringup simulation.launch.py \
   world:=empty localization:=false rviz:=true
 ```
 
+## Phase 1 runtime contracts
+
+With a fused simulation running, validate the configured IMU (50 Hz), LiDAR
+(10 Hz), controller odometry (100 Hz), and filtered odometry (50 Hz) contracts:
+
+```bash
+ros2 run mobile_base_tools timestamp_validator \
+  --mode fused --duration 10 \
+  --output phase1_results/diagnostics/timestamp_fused.json \
+  --ros-args -p use_sim_time:=true
+ros2 run mobile_base_tools tf_validator \
+  --mode fused --duration 10 \
+  --output phase1_results/diagnostics/tf_fused.json \
+  --ros-args -p use_sim_time:=true
+```
+
+Use `--mode raw` for `localization:=false`. Timestamp thresholds live in
+`mobile_base_tools/config/timestamp_contracts.yaml`; they enforce sample count,
+nonzero finite monotonic stamps, duplicate policy, minimum rate, maximum gap,
+message age, and finite payload values. Both validators write JSON, print a
+short PASS/FAIL summary, return nonzero on failure, and use a wall-time bound so
+a paused simulation clock cannot hang validation.
+
+The TF validator checks the complete Phase 1 frame tree, required sensor and
+wheel connections, advancing dynamic transforms, sane values and stamps, no
+loops or multiple parents, no `map -> odom`, no evaluation-only frames, and the
+single-owner rule. In fused mode the EKF must publish TF while the controller's
+`enable_odom_tf` is false; raw mode requires the inverse.
+
 ## Raw and filtered odometry evaluation
 
 `mobile_base_tools` compares Gazebo ground truth, raw controller odometry, and
@@ -382,7 +424,7 @@ Run one forward test once:
 ```bash
 ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
   test_profile:=forward_1m repetitions:=1 \
-  output_dir:=/tmp/phase1_results/fused_comparison
+  output_dir:=phase1_results/smoke_test
 ```
 
 Run all 11 profiles with the default five repetitions:
@@ -390,7 +432,7 @@ Run all 11 profiles with the default five repetitions:
 ```bash
 ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
   test_profile:=all repetitions:=0 \
-  output_dir:=/tmp/phase1_results/fused_comparison
+  output_dir:=phase1_results/fused_comparison
 ```
 
 Preserve a controller-only baseline separately:
@@ -399,8 +441,22 @@ Preserve a controller-only baseline separately:
 ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
   test_profile:=all repetitions:=0 \
   evaluation_mode:=raw_only localization:=false \
-  output_dir:=/tmp/phase1_results/raw_baseline
+  output_dir:=phase1_results/raw_baseline
 ```
+
+For the formal fresh-process campaign (55 raw-only plus 55 fused runs), use a
+new empty output directory:
+
+```bash
+ros2 run mobile_base_tools evaluation_campaign \
+  --modes raw_only,raw_and_filtered --repetitions 5 \
+  --output-dir phase1_results/formal_campaign
+```
+
+The campaign manifest is updated atomically after every profile launch. An
+interrupted campaign is marked `interrupted`; `--resume` skips completed cases
+while retaining every prior attempt and launch log. Without `--resume`, the
+tool refuses to write into a non-empty directory.
 
 Use an explicit writable output directory for retained evidence; the fallback
 is `/tmp/mobile_base_phase1`, never a hardcoded workspace source path. The
@@ -412,12 +468,15 @@ are `world`, `config_file`, `robot_entity`, `shutdown_on_complete`, `gui`, and
 `mobile_base_tools/config/odometry_tests.yaml`; `repetitions:=0` uses the
 five-repetition YAML value.
 
-Generated evaluation outputs are intentionally ignored under
-`odometry_results/` and `phase1_results/`. No complete authoritative Phase 1
-result set is currently tracked. To regenerate one, run the all-profile command
-above with an explicit output directory, then retain only reviewed summary
-files and a small set of aggregate plots if repository evidence is desired;
-per-run trajectories and repetitive plots should remain local.
+Complete evaluation output is generated inside the ignored
+`phase1_results/` directory. Campaign manifests, summaries, trajectories,
+plots, process/resource telemetry, and host diagnostics remain local evidence
+and are intentionally excluded from source commits. Copy or back up that
+directory separately when evidence must be retained across machines.
+
+Formal Phase 1 runtime validation remains pending on a stable host. Reboot into
+a clean host state, pass the representative lifecycle stress test, and only
+then resume a retained campaign through `--resume`.
 
 Each repetition publishes zero velocity, verifies measured velocity is below
 threshold, resets the named Gazebo model through `/world/empty/set_pose`,
@@ -635,3 +694,11 @@ development. Detailed roller mesh collision remains intentionally out of scope u
 measured cylinder-contact limitations justify its performance cost.
 Accurate mecanum ground interaction eventually requires modeled rollers or calibrated
 anisotropic contact parameters for the selected Gazebo physics engine.
+
+## Continuous integration
+
+`.github/workflows/ci.yaml` builds all six packages on ROS 2 Jazzy and runs the
+deterministic unit, lint, Xacro/URDF, configuration, Python compilation, and
+whitespace checks. Gazebo launch tests and the 110-run formal campaign stay out
+of normal pull-request CI; they remain explicit runtime validation on a stable
+host.

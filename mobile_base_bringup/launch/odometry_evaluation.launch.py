@@ -70,8 +70,22 @@ def _evaluation_actions(context):
             'config_file': LaunchConfiguration('config_file'),
             'output_dir': LaunchConfiguration('output_dir'),
             'test_profile': LaunchConfiguration('test_profile'),
+            'profile_sequence': LaunchConfiguration('profile_sequence'),
             'repetitions': LaunchConfiguration('repetitions'),
+            'repetition_offset': LaunchConfiguration('repetition_offset'),
             'evaluation_mode': LaunchConfiguration('evaluation_mode'),
+            'localization': LaunchConfiguration('localization'),
+            'profile_order': LaunchConfiguration('profile_order'),
+            'random_seed': LaunchConfiguration('random_seed'),
+            'diagnostic_verbose': LaunchConfiguration('diagnostic_verbose'),
+            'wall_watchdog_factor': LaunchConfiguration(
+                'wall_watchdog_factor'),
+            'minimum_wall_watchdog': LaunchConfiguration(
+                'minimum_wall_watchdog'),
+            'clock_stall_timeout': LaunchConfiguration(
+                'clock_stall_timeout'),
+            'motion_start_timeout': LaunchConfiguration(
+                'motion_start_timeout'),
             'world': world,
             'robot_entity': LaunchConfiguration('robot_entity'),
             'ground_truth_topic': ground_truth_topic,
@@ -108,6 +122,7 @@ def generate_launch_description():
             'rviz': LaunchConfiguration('rviz'),
             'use_sim_time': 'true',
             'localization': LaunchConfiguration('localization'),
+            'render_engine': LaunchConfiguration('render_engine'),
         }.items(),
     )
     default_config = (
@@ -117,10 +132,19 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('world', default_value='empty'),
         DeclareLaunchArgument('test_profile', default_value='all'),
+        DeclareLaunchArgument('profile_sequence', default_value=''),
         DeclareLaunchArgument(
             'evaluation_mode', default_value='raw_and_filtered'),
         DeclareLaunchArgument('localization', default_value='true'),
         DeclareLaunchArgument('repetitions', default_value='0'),
+        DeclareLaunchArgument('repetition_offset', default_value='0'),
+        DeclareLaunchArgument('profile_order', default_value='configured'),
+        DeclareLaunchArgument('random_seed', default_value='0'),
+        DeclareLaunchArgument('diagnostic_verbose', default_value='false'),
+        DeclareLaunchArgument('wall_watchdog_factor', default_value='3.0'),
+        DeclareLaunchArgument('minimum_wall_watchdog', default_value='30.0'),
+        DeclareLaunchArgument('clock_stall_timeout', default_value='5.0'),
+        DeclareLaunchArgument('motion_start_timeout', default_value='2.0'),
         DeclareLaunchArgument(
             'output_dir', default_value='/tmp/mobile_base_phase1'
         ),
@@ -128,6 +152,7 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_entity', default_value='mobile_base'),
         DeclareLaunchArgument('gui', default_value='false'),
         DeclareLaunchArgument('rviz', default_value='false'),
+        DeclareLaunchArgument('render_engine', default_value='ogre'),
         DeclareLaunchArgument('shutdown_on_complete', default_value='true'),
         simulation,
         OpaqueFunction(function=_evaluation_actions),

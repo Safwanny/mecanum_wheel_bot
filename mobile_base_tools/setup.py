@@ -28,5 +28,8 @@ setup(
         'mecanum_motion_test = mobile_base_tools.mecanum_motion_test:main',
         'odometry_test_runner = mobile_base_tools.odometry_test_runner:main',
         'odom_to_path = mobile_base_tools.odom_to_path:main',
+        'timestamp_validator = mobile_base_tools.timestamp_validator:main',
+        'tf_validator = mobile_base_tools.tf_validator:main',
+        'evaluation_campaign = mobile_base_tools.evaluation_campaign:main',
     ]},
 )

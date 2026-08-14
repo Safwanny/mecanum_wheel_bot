@@ -1,0 +1,45 @@
+timestamp_contracts:
+  imu:
+    topic: /imu/data
+    type: sensor_msgs/msg/Imu
+    expected_rate_hz: 50.0
+    minimum_rate_hz: 40.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.10
+    maximum_age_sec: 0.15
+    required_in: [raw, fused]
+
+  scan:
+    topic: /scan
+    type: sensor_msgs/msg/LaserScan
+    expected_rate_hz: 10.0
+    minimum_rate_hz: 8.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.25
+    maximum_age_sec: 0.20
+    required_in: [raw, fused]
+
+  raw_odometry:
+    topic: /mobile_base_controller/odometry
+    type: nav_msgs/msg/Odometry
+    expected_rate_hz: 100.0
+    minimum_rate_hz: 80.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.05
+    maximum_age_sec: 0.10
+    required_in: [raw, fused]
+
+  filtered_odometry:
+    topic: /odometry/filtered
+    type: nav_msgs/msg/Odometry
+    expected_rate_hz: 50.0
+    minimum_rate_hz: 40.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.10
+    # The EKF chain can be one 0.2 s scheduling window behind under llvmpipe.
+    maximum_age_sec: 0.25
+    required_in: [fused]

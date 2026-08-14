@@ -14,6 +14,7 @@
 
 import os
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import (
     get_package_prefix,
@@ -24,7 +25,6 @@ from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
     ExecuteProcess,
-    GroupAction,
     IncludeLaunchDescription,
     OpaqueFunction,
     RegisterEventHandler,
@@ -40,7 +40,7 @@ from launch.substitutions import (
     PathJoinSubstitution,
     PythonExpression,
 )
-from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
@@ -156,6 +156,29 @@ def _resolve_world(context, worlds_directory):
         raise RuntimeError(
             f"Gazebo world '{requested}' resolved to missing file: {resolved}"
         )
+    render_engine = LaunchConfiguration('render_engine').perform(context)
+    if render_engine not in ('ogre', 'ogre2'):
+        raise RuntimeError("render_engine must be 'ogre' or 'ogre2'")
+    if render_engine != 'ogre2':
+        tree = ET.parse(resolved)
+        sensors_plugins = [
+            plugin for plugin in tree.findall('.//plugin')
+            if plugin.attrib.get('name') == 'gz::sim::systems::Sensors'
+        ]
+        if len(sensors_plugins) != 1:
+            raise RuntimeError(
+                f'Expected one Gazebo Sensors plugin in {resolved}, found '
+                f'{len(sensors_plugins)}'
+            )
+        engine = sensors_plugins[0].find('render_engine')
+        if engine is None:
+            engine = ET.SubElement(sensors_plugins[0], 'render_engine')
+        engine.text = render_engine
+        generated = Path(
+            f'/tmp/mobile_base_world_{os.getpid()}_{render_engine}.sdf'
+        )
+        tree.write(generated, encoding='utf-8', xml_declaration=True)
+        resolved = generated
     context.launch_configurations['resolved_world'] = str(resolved.resolve())
     return []
 
@@ -252,6 +275,10 @@ def generate_launch_description():
             'joint_state_broadcaster',
             '--controller-manager',
             'controller_manager',
+            '--switch-timeout',
+            '20.0',
+            '--service-call-timeout',
+            '20.0',
         ],
         output='screen',
     )
@@ -262,6 +289,10 @@ def generate_launch_description():
             'mobile_base_controller',
             '--controller-manager',
             'controller_manager',
+            '--switch-timeout',
+            '20.0',
+            '--service-call-timeout',
+            '20.0',
             '--controller-ros-args=-r',
             '--controller-ros-args=mobile_base_controller/tf_odometry:=/tf',
             '--controller-ros-args=-p',
@@ -281,6 +312,10 @@ def generate_launch_description():
             'mobile_base_controller',
             '--controller-manager',
             'controller_manager',
+            '--switch-timeout',
+            '20.0',
+            '--service-call-timeout',
+            '20.0',
             '--controller-ros-args=-r',
             '--controller-ros-args=mobile_base_controller/tf_odometry:=/tf',
             '--controller-ros-args=-p',
@@ -385,6 +420,14 @@ def generate_launch_description():
             DeclareLaunchArgument('gui', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
             DeclareLaunchArgument(
+                'render_engine',
+                default_value='ogre2',
+                description=(
+                    "Gazebo sensor render engine: 'ogre2' normally or "
+                    "'ogre' for Mesa software-rendered validation."
+                ),
+            ),
+            DeclareLaunchArgument(
                 'localization',
                 default_value='true',
                 description=(
@@ -397,7 +440,6 @@ def generate_launch_description():
                 default_value='true',
                 description='Start the mecanum ros2_control controller.',
             ),
-            DeclareLaunchArgument('namespace', default_value=''),
             DeclareLaunchArgument('x', default_value='0.0'),
             DeclareLaunchArgument('y', default_value='0.0'),
             DeclareLaunchArgument('z', default_value='0.08'),
@@ -416,49 +458,44 @@ def generate_launch_description():
                 launch_arguments={'gz_args': ['-r -s ', world]}.items(),
                 condition=UnlessCondition(LaunchConfiguration('gui')),
             ),
-            GroupAction(
-                [
-                    PushRosNamespace(LaunchConfiguration('namespace')),
-                    robot_state_publisher,
-                    RegisterEventHandler(
-                        OnProcessExit(
-                            target_action=generate_sdf,
-                            on_exit=after_sdf_generation,
+            robot_state_publisher,
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=generate_sdf,
+                    on_exit=after_sdf_generation,
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=spawn_robot,
+                    on_exit=after_robot_spawn,
+                )
+            ),
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=joint_state_spawner,
+                    on_exit=after_joint_state_spawner,
+                )
+            ),
+            generate_sdf,
+            Node(
+                package='ros_gz_bridge',
+                executable='parameter_bridge',
+                arguments=[
+                    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+                    '/camera/image_raw@sensor_msgs/msg/Image[gz.msgs.Image',
+                    '/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+                    '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+                    '/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
+                ],
+                parameters=[
+                    {
+                        'use_sim_time': LaunchConfiguration(
+                            'use_sim_time'
                         )
-                    ),
-                    RegisterEventHandler(
-                        OnProcessExit(
-                            target_action=spawn_robot,
-                            on_exit=after_robot_spawn,
-                        )
-                    ),
-                    RegisterEventHandler(
-                        OnProcessExit(
-                            target_action=joint_state_spawner,
-                            on_exit=after_joint_state_spawner,
-                        )
-                    ),
-                    generate_sdf,
-                    Node(
-                        package='ros_gz_bridge',
-                        executable='parameter_bridge',
-                        arguments=[
-                            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-                            '/camera/image_raw@sensor_msgs/msg/Image[gz.msgs.Image',
-                            '/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-                            '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-                            '/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
-                        ],
-                        parameters=[
-                            {
-                                'use_sim_time': LaunchConfiguration(
-                                    'use_sim_time'
-                                )
-                            }
-                        ],
-                        output='screen',
-                    ),
-                ]
+                    }
+                ],
+                output='screen',
             ),
         ]
     )

@@ -109,8 +109,20 @@ def write_trajectory(path, samples):
         'odometry_x', 'odometry_y', 'odometry_yaw', 'raw_odometry_stamp',
         'filtered_x', 'filtered_y', 'filtered_yaw',
         'filtered_odometry_stamp',
+        'wall_elapsed', 'simulation_elapsed', 'real_time_factor',
+        'ground_truth_speed', 'raw_odometry_speed',
     )
     _write_csv(Path(path), samples, fields)
+
+
+def write_run_result(path, result):
+    """Write a structured result for one completed or failed attempt."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
 
 
 def write_report(output_dir, report):
@@ -173,14 +185,16 @@ def write_report(output_dir, report):
         metrics = data['metrics']
         raw = metrics.get('raw_position_error_norm')
         filtered = metrics.get('filtered_position_error_norm')
-        raw_mean = f"{raw['mean']:.6f}" if raw else 'n/a'
+        raw_mean = '{:.6f}'.format(raw['mean']) if raw else 'n/a'
         filtered_mean = (
-            f"{filtered['mean']:.6f}" if filtered else 'n/a'
+            '{:.6f}'.format(filtered['mean']) if filtered else 'n/a'
         )
+        completed_count = data['completed_count']
+        failed_count = data['failed_count']
         lines.append(
-            f"| {name} | {data['completed_count']} | "
-            f"{data['failed_count']} | {raw_mean} | "
-            f"{filtered_mean} |"
+            f'| {name} | {completed_count} | '
+            f'{failed_count} | {raw_mean} | '
+            f'{filtered_mean} |'
         )
     lines.extend([
         '',

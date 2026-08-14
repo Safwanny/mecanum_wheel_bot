@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """Run YAML-defined raw wheel-odometry evaluation profiles."""
 
+from datetime import datetime, timezone
 import math
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import time
 
 from ament_index_python.packages import get_package_share_directory
+from controller_manager_msgs.srv import ListControllers
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mobile_base_tools.motion_profiles import load_profiles
 from mobile_base_tools.odometry_evaluator import (
     calculate_run_metrics,
+    command_progress,
+    command_stamp_status,
+    ordered_profiles,
+    post_reset_streams_fresh,
     termination_reached,
-    timeout_expired,
+    timeout_reason,
+    update_settle_window,
 )
 from mobile_base_tools.plot_writer import (
     plot_trajectory,
@@ -31,6 +37,7 @@ from mobile_base_tools.pose_math import (
 from mobile_base_tools.report_writer import (
     build_report,
     write_report,
+    write_run_result,
     write_trajectory,
 )
 from nav_msgs.msg import Odometry
@@ -55,8 +62,11 @@ class OdometryTestRunner(Node):
             'config_file': str(Path(share) / 'config' / 'odometry_tests.yaml'),
             'output_dir': '/tmp/mobile_base_phase1',
             'test_profile': 'all',
+            'profile_sequence': '',
             'evaluation_mode': 'raw_and_filtered',
+            'localization': True,
             'repetitions': 0,
+            'repetition_offset': 0,
             'sample_rate': 20.0,
             'startup_timeout': 60.0,
             'data_timeout': 2.0,
@@ -65,7 +75,17 @@ class OdometryTestRunner(Node):
             'reset_position_tolerance': 0.03,
             'reset_yaw_tolerance': 0.05,
             'reset_timeout': 5.0,
+            'settle_window': 0.5,
             'max_source_skew': 0.1,
+            'wall_watchdog_factor': 3.0,
+            'minimum_wall_watchdog': 30.0,
+            'clock_stall_timeout': 5.0,
+            'motion_start_timeout': 2.0,
+            'motion_start_speed_threshold': 0.005,
+            'progress_log_interval': 2.0,
+            'diagnostic_verbose': False,
+            'profile_order': 'configured',
+            'random_seed': 0,
             'world': 'empty',
             'robot_entity': 'mobile_base',
             'spawn_x': 0.0,
@@ -76,6 +96,10 @@ class OdometryTestRunner(Node):
                 '/mobile_base/evaluation/ground_truth'
             ),
             'set_pose_service': '/world/empty/set_pose',
+            'list_controllers_service': (
+                '/controller_manager/list_controllers'
+            ),
+            'controller_name': 'mobile_base_controller',
             'command_topic': '/mobile_base_controller/reference',
             'odometry_topic': '/mobile_base_controller/odometry',
             'filtered_odometry_topic': '/odometry/filtered',
@@ -87,13 +111,21 @@ class OdometryTestRunner(Node):
         self.config_file = self._string('config_file')
         self.output_dir = Path(self._string('output_dir')).expanduser()
         self.selected_profile = self._string('test_profile')
+        self.profile_sequence = str(
+            self.get_parameter('profile_sequence').value).strip()
         self.evaluation_mode = self._string('evaluation_mode')
+        self.localization_enabled = bool(
+            self.get_parameter('localization').value)
         if self.evaluation_mode not in ('raw_only', 'raw_and_filtered'):
             raise ValueError(
                 'evaluation_mode must be raw_only or raw_and_filtered')
         self.repetitions_override = int(
             self.get_parameter('repetitions').value
         )
+        self.repetition_offset = int(
+            self.get_parameter('repetition_offset').value)
+        if self.repetition_offset < 0:
+            raise ValueError('repetition_offset must not be negative')
         self.sample_rate = self._positive('sample_rate')
         self.startup_timeout = self._positive('startup_timeout')
         self.data_timeout = self._positive('data_timeout')
@@ -105,7 +137,24 @@ class OdometryTestRunner(Node):
             'reset_position_tolerance')
         self.reset_yaw_tolerance = self._positive('reset_yaw_tolerance')
         self.reset_timeout = self._positive('reset_timeout')
+        self.settle_window = self._positive('settle_window')
         self.max_source_skew = self._positive('max_source_skew')
+        self.wall_watchdog_factor = self._positive('wall_watchdog_factor')
+        self.minimum_wall_watchdog = self._positive(
+            'minimum_wall_watchdog')
+        self.clock_stall_timeout = self._positive('clock_stall_timeout')
+        self.motion_start_timeout = self._positive('motion_start_timeout')
+        self.motion_start_speed_threshold = self._positive(
+            'motion_start_speed_threshold')
+        self.progress_log_interval = self._positive(
+            'progress_log_interval')
+        self.diagnostic_verbose = bool(
+            self.get_parameter('diagnostic_verbose').value)
+        self.profile_order = self._string('profile_order')
+        if self.profile_order not in ('configured', 'randomized'):
+            raise ValueError(
+                'profile_order must be configured or randomized')
+        self.random_seed = int(self.get_parameter('random_seed').value)
         self.world = self._string('world')
         self.robot_entity = self._string('robot_entity')
         self.command_frame = self._string('command_frame')
@@ -120,13 +169,21 @@ class OdometryTestRunner(Node):
             raise ValueError('spawn pose must contain finite values')
 
         self.profiles = load_profiles(self.config_file)
-        if (
-            self.selected_profile != 'all'
-            and self.selected_profile not in self.profiles
-        ):
+        sequence_names = [
+            name.strip() for name in self.profile_sequence.split(',')
+            if name.strip()
+        ]
+        unknown_sequence = set(sequence_names) - set(self.profiles)
+        if unknown_sequence:
+            raise ValueError(
+                'unknown profile_sequence entries: '
+                + ', '.join(sorted(unknown_sequence)))
+        if (not sequence_names and self.selected_profile != 'all'
+                and self.selected_profile not in self.profiles):
             raise ValueError(
                 f'unknown test_profile: {self.selected_profile}'
             )
+        self.profile_sequence_names = sequence_names
 
         self.latest_ground_truth = None
         self.latest_ground_truth_wall = 0.0
@@ -136,6 +193,14 @@ class OdometryTestRunner(Node):
         self.latest_filtered = None
         self.latest_filtered_wall = 0.0
         self._last_sample_stamp = None
+        self._previous_ground_truth = None
+        self._previous_odometry = None
+        self.ground_truth_speed = 0.0
+        self.raw_odometry_speed = 0.0
+        self.command_diagnostics = self._new_command_diagnostics()
+        self.last_command = None
+        self.last_command_stamp = None
+        self.last_command_wall = None
         self._shutdown_requested = False
 
         self.command_publisher = self.create_publisher(
@@ -162,6 +227,9 @@ class OdometryTestRunner(Node):
         self.set_pose_client = self.create_client(
             SetEntityPose, self._string('set_pose_service')
         )
+        self.list_controllers_client = self.create_client(
+            ListControllers, self._string('list_controllers_service')
+        )
 
     def _string(self, name):
         value = str(self.get_parameter(name).value)
@@ -174,6 +242,17 @@ class OdometryTestRunner(Node):
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f'{name} must be finite and positive')
         return value
+
+    @staticmethod
+    def _new_command_diagnostics():
+        return {
+            'commands_published': 0,
+            'duplicate_command_timestamps': 0,
+            'nonmonotonic_command_timestamps': 0,
+            'rate_limited_command_attempts': 0,
+            'maximum_publish_to_current_sim_time_age': 0.0,
+            'motion_start_failures': 0,
+        }
 
     @staticmethod
     def _pose_from_message(pose, stamp):
@@ -210,6 +289,13 @@ class OdometryTestRunner(Node):
         except ValueError:
             self.get_logger().error('Nonmonotonic Gazebo pose timestamp')
             return
+        previous = self.latest_ground_truth
+        if previous is not None and pose.stamp > previous.stamp:
+            delta = relative_pose(previous, pose)
+            self.ground_truth_speed = (
+                math.hypot(delta.x, delta.y) / (pose.stamp - previous.stamp)
+            )
+        self._previous_ground_truth = previous
         self.latest_ground_truth = pose
         self.latest_ground_truth_wall = time.monotonic()
 
@@ -252,6 +338,13 @@ class OdometryTestRunner(Node):
         ):
             self.get_logger().error('Nonmonotonic odometry timestamp')
             return
+        previous = self.latest_odometry
+        if previous is not None and pose.stamp > previous.stamp:
+            delta = relative_pose(previous, pose)
+            self.raw_odometry_speed = (
+                math.hypot(delta.x, delta.y) / (pose.stamp - previous.stamp)
+            )
+        self._previous_odometry = previous
         self.latest_odometry = pose
         self.latest_odometry_message = message
         self.latest_odometry_wall = time.monotonic()
@@ -267,9 +360,47 @@ class OdometryTestRunner(Node):
     def wait_until_ready(self):
         """Wait boundedly for controller, odometry, Gazebo pose, and reset."""
         self._spin_until(
+            self.list_controllers_client.service_is_ready,
+            self.startup_timeout,
+            'startup timeout waiting for controller manager',
+        )
+        deadline = time.monotonic() + self.startup_timeout
+        controller_active = False
+        while rclpy.ok() and time.monotonic() < deadline:
+            future = self.list_controllers_client.call_async(
+                ListControllers.Request())
+            self._spin_until(
+                future.done,
+                min(10.0, max(0.1, deadline - time.monotonic())),
+                'controller-manager list request timed out',
+            )
+            response = future.result()
+            controller_active = any(
+                controller.name == self._string('controller_name')
+                and controller.state == 'active'
+                for controller in response.controller
+            )
+            if controller_active:
+                break
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if not controller_active:
+            raise EvaluationError(
+                f'{self._string("controller_name")} did not become active')
+
+        # Discard any samples produced before activation and require a fresh,
+        # mutually aligned startup baseline.
+        self.latest_ground_truth = None
+        self.latest_odometry = None
+        self.latest_odometry_message = None
+        self.latest_filtered = None
+        self._spin_until(
             lambda: (
                 self.latest_ground_truth is not None
                 and self.latest_odometry is not None
+                and self._sim_now() > 0.0
+                and abs(
+                    self._sim_now() - self.latest_ground_truth.stamp
+                ) <= self.max_source_skew
                 and (
                     self.evaluation_mode == 'raw_only'
                     or self.latest_filtered is not None
@@ -282,8 +413,44 @@ class OdometryTestRunner(Node):
             'odometry streams, or reset',
         )
 
-    def publish_command(self, command=None):
-        """Publish a fully initialized native controller command."""
+    def _sim_now(self):
+        return self.get_clock().now().nanoseconds / 1e9
+
+    def _wait_for_clock_advance(self, previous, timeout=None):
+        timeout = timeout or self.clock_stall_timeout
+        self._spin_until(
+            lambda: self._sim_now() > max(0.0, previous),
+            timeout,
+            'clock stalled',
+        )
+        return self._sim_now()
+
+    def publish_command(self, command=None, force=False):
+        """Publish one fresh command, never bursting a duplicate ROS stamp."""
+        rclpy.spin_once(self, timeout_sec=0.0)
+        stamp = self._sim_now()
+        stamp_status = command_stamp_status(self.last_command_stamp, stamp)
+        if stamp_status == 'zero':
+            raise EvaluationError('simulation clock is zero')
+        if stamp_status == 'nonmonotonic':
+            self.command_diagnostics[
+                'nonmonotonic_command_timestamps'] += 1
+            raise EvaluationError(
+                'nonmonotonic command timestamp: '
+                f'current={stamp:.9f}, previous={self.last_command_stamp:.9f}'
+            )
+        if stamp_status == 'duplicate':
+            self.command_diagnostics[
+                'duplicate_command_timestamps'] += 1
+            return False
+        if (
+            not force
+            and self.last_command_stamp is not None
+            and stamp - self.last_command_stamp < 1.0 / self.sample_rate
+        ):
+            self.command_diagnostics[
+                'rate_limited_command_attempts'] += 1
+            return False
         message = TwistStamped()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = self.command_frame
@@ -292,21 +459,65 @@ class OdometryTestRunner(Node):
             message.twist.linear.y = command.linear_y
             message.twist.angular.z = command.angular_z
         self.command_publisher.publish(message)
+        publish_wall = time.monotonic()
+        current_sim = self._sim_now()
+        age = max(0.0, current_sim - stamp)
+        diagnostics = self.command_diagnostics
+        diagnostics['commands_published'] += 1
+        diagnostics['maximum_publish_to_current_sim_time_age'] = max(
+            diagnostics['maximum_publish_to_current_sim_time_age'], age)
+        self.last_command = {
+            'linear_x': message.twist.linear.x,
+            'linear_y': message.twist.linear.y,
+            'angular_z': message.twist.angular.z,
+        }
+        self.last_command_stamp = stamp
+        self.last_command_wall = publish_wall
+        return True
 
     def safe_stop(self, duration=None):
-        """Publish repeated zero commands and verify odometry settles."""
+        """Publish zero commands and require continuously settled odometry."""
         duration = duration or self.stop_publish_duration
-        deadline = time.monotonic() + duration
-        while rclpy.ok() and time.monotonic() < deadline:
-            self.publish_command()
+        wall_deadline = time.monotonic() + max(
+            self.minimum_wall_watchdog,
+            duration * self.wall_watchdog_factor,
+        )
+        settled_since = None
+        first_zero_command = True
+        last_clock = self._sim_now()
+        last_clock_advance_wall = time.monotonic()
+        while rclpy.ok() and time.monotonic() < wall_deadline:
             rclpy.spin_once(self, timeout_sec=1.0 / self.sample_rate)
-        message = self.latest_odometry_message
-        if message is None:
-            raise EvaluationError('cannot confirm stop without odometry')
-        twist = message.twist.twist
-        if any(abs(value) > self.stop_velocity_threshold for value in (
-                twist.linear.x, twist.linear.y, twist.angular.z)):
-            raise EvaluationError('robot did not settle below stop threshold')
+            current_clock = self._sim_now()
+            if current_clock > last_clock:
+                last_clock = current_clock
+                last_clock_advance_wall = time.monotonic()
+            if self.publish_command(force=first_zero_command):
+                first_zero_command = False
+            message = self.latest_odometry_message
+            if message is None:
+                settled_since = None
+                continue
+            twist = message.twist.twist
+            stopped = all(
+                abs(value) <= self.stop_velocity_threshold for value in (
+                    twist.linear.x, twist.linear.y, twist.angular.z
+                )
+            )
+            settled_since, complete = update_settle_window(
+                settled_since,
+                current_clock,
+                stopped,
+                max(duration, self.settle_window),
+            )
+            if complete:
+                return
+            if (
+                time.monotonic() - last_clock_advance_wall
+                >= self.clock_stall_timeout
+            ):
+                raise EvaluationError('clock stalled while stopping')
+        raise EvaluationError('robot did not remain settled continuously')
 
     def _request_reset(self):
         request = SetEntityPose.Request()
@@ -330,6 +541,12 @@ class OdometryTestRunner(Node):
         """Stop, reset the Gazebo entity, confirm, and record fresh inputs."""
         self.safe_stop()
         previous_gt_stamp = self.latest_ground_truth.stamp
+        previous_raw_stamp = self.latest_odometry.stamp
+        previous_filtered_stamp = (
+            self.latest_filtered.stamp
+            if self.latest_filtered is not None else None
+        )
+        reset_boundary = self._sim_now()
         self._request_reset()
         self._spin_until(
             lambda: (
@@ -348,10 +565,35 @@ class OdometryTestRunner(Node):
             self.reset_timeout,
             'Gazebo ground truth did not verify the requested reset pose',
         )
-        deadline = time.monotonic() + settle_duration
-        while rclpy.ok() and time.monotonic() < deadline:
-            self.publish_command()
-            rclpy.spin_once(self, timeout_sec=1.0 / self.sample_rate)
+        self._spin_until(
+            lambda: post_reset_streams_fresh(
+                self.latest_ground_truth.stamp,
+                previous_gt_stamp,
+                self.latest_odometry.stamp,
+                previous_raw_stamp,
+            ),
+            self.reset_timeout,
+            'raw odometry did not update after reset',
+        )
+        if self.evaluation_mode == 'raw_and_filtered':
+            self._spin_until(
+                lambda: post_reset_streams_fresh(
+                    self.latest_ground_truth.stamp,
+                    previous_gt_stamp,
+                    self.latest_odometry.stamp,
+                    previous_raw_stamp,
+                    (
+                        self.latest_filtered.stamp
+                        if self.latest_filtered is not None else None
+                    ),
+                    previous_filtered_stamp,
+                    require_filtered=True,
+                ),
+                self.reset_timeout,
+                'filtered odometry did not update after reset',
+            )
+        self._wait_for_clock_advance(reset_boundary)
+        self.safe_stop(max(settle_duration, self.settle_window))
         self._assert_fresh_data()
         return (
             self.latest_ground_truth,
@@ -381,7 +623,8 @@ class OdometryTestRunner(Node):
                 raise EvaluationError(
                     'ground-truth/raw/filtered timestamp skew exceeded limit')
 
-    def _sample(self, command):
+    def _sample(
+            self, command, wall_elapsed=0.0, simulation_elapsed=0.0):
         self._assert_fresh_data()
         stamp = max(
             self.latest_ground_truth.stamp,
@@ -389,7 +632,10 @@ class OdometryTestRunner(Node):
             self.latest_filtered.stamp
             if self.latest_filtered is not None else 0.0,
         )
-        if self._last_sample_stamp is not None and stamp < self._last_sample_stamp:
+        if (
+            self._last_sample_stamp is not None
+            and stamp < self._last_sample_stamp
+        ):
             raise EvaluationError('nonmonotonic sampled trajectory timestamp')
         self._last_sample_stamp = stamp
         return {
@@ -417,25 +663,127 @@ class OdometryTestRunner(Node):
             'filtered_odometry_stamp': (
                 self.latest_filtered.stamp
                 if self.latest_filtered is not None else ''),
+            'wall_elapsed': wall_elapsed,
+            'simulation_elapsed': simulation_elapsed,
+            'real_time_factor': (
+                simulation_elapsed / wall_elapsed
+                if wall_elapsed > 0.0 else 0.0
+            ),
+            'ground_truth_speed': self.ground_truth_speed,
+            'raw_odometry_speed': self.raw_odometry_speed,
         }
 
     def _execute_segment(
-            self, segment, samples, profile_started, profile_timeout):
+            self, segment, samples, profile_sim_started, profile_wall_started,
+            profile_timeout):
         initial = self.latest_ground_truth
         initial_odometry = self.latest_odometry
-        started = time.monotonic()
+        simulation_started = self._sim_now()
+        wall_started = time.monotonic()
+        wall_watchdog = max(
+            self.minimum_wall_watchdog,
+            segment.timeout * self.wall_watchdog_factor,
+        )
+        profile_wall_watchdog = max(
+            self.minimum_wall_watchdog,
+            profile_timeout * self.wall_watchdog_factor,
+        )
+        last_clock = simulation_started
+        last_clock_advance_wall = wall_started
+        motion_started = False
+        next_progress_log = self.progress_log_interval
+        self._active_segment_diagnostics = {
+            'segment': segment.name,
+            'target': segment.target,
+            'simulation_started': simulation_started,
+            'wall_started': wall_started,
+            'motion_started': False,
+        }
+        self._wait_for_clock_advance(simulation_started)
+        self.get_logger().info(
+            f'Starting segment {segment.name}; simulation timeout '
+            f'{segment.timeout:.3f}s, wall watchdog {wall_watchdog:.3f}s'
+        )
         while rclpy.ok():
-            if timeout_expired(started, time.monotonic(), segment.timeout):
-                raise EvaluationError(f'{segment.name} timed out')
-            if timeout_expired(
-                    profile_started, time.monotonic(), profile_timeout):
-                raise EvaluationError('profile timed out')
-            self.publish_command(segment.command)
             rclpy.spin_once(self, timeout_sec=1.0 / self.sample_rate)
-            samples.append(self._sample(segment.command))
+            simulation_now = self._sim_now()
+            wall_now = time.monotonic()
+            if simulation_now > last_clock:
+                last_clock = simulation_now
+                last_clock_advance_wall = wall_now
+            reason = timeout_reason(
+                simulation_started, simulation_now, segment.timeout,
+                wall_started, wall_now, wall_watchdog,
+                last_clock_advance_wall, self.clock_stall_timeout,
+            )
+            if reason is None:
+                reason = timeout_reason(
+                    profile_sim_started, simulation_now, profile_timeout,
+                    profile_wall_started, wall_now, profile_wall_watchdog,
+                    last_clock_advance_wall, self.clock_stall_timeout,
+                )
+                if reason is not None:
+                    reason = 'profile ' + reason
+            if reason is not None:
+                if reason == 'simulation timeout':
+                    reason = (
+                        f'{segment.name}: motion started but target was '
+                        'not reached before simulation timeout'
+                    )
+                raise EvaluationError(reason)
+            published = self.publish_command(segment.command)
+            simulation_elapsed = simulation_now - simulation_started
+            wall_elapsed = wall_now - wall_started
+            if published:
+                samples.append(self._sample(
+                    segment.command, wall_elapsed, simulation_elapsed))
+            speed = max(self.ground_truth_speed, self.raw_odometry_speed)
+            if (
+                not motion_started
+                and speed >= self.motion_start_speed_threshold
+            ):
+                motion_started = True
+                self._active_segment_diagnostics['motion_started'] = True
+                self.get_logger().info(
+                    f'{segment.name}: motion start confirmed at '
+                    f'{simulation_elapsed:.3f}s simulation time'
+                )
+            if (
+                not motion_started
+                and simulation_elapsed >= self.motion_start_timeout
+            ):
+                self.command_diagnostics['motion_start_failures'] += 1
+                raise EvaluationError('motion did not start after command')
+            progress = command_progress(
+                segment.command, initial, self.latest_ground_truth,
+                segment.target)
+            self._active_segment_diagnostics.update({
+                **progress,
+                'wall_elapsed': wall_elapsed,
+                'simulation_elapsed': simulation_elapsed,
+                'real_time_factor': (
+                    simulation_elapsed / wall_elapsed
+                    if wall_elapsed > 0.0 else 0.0
+                ),
+            })
+            if (
+                self.diagnostic_verbose
+                or simulation_elapsed >= next_progress_log
+            ):
+                percentage = progress['percentage_of_target_reached']
+                along = progress['along_track_displacement']
+                cross = progress['cross_track_displacement']
+                real_time_factor = self._active_segment_diagnostics[
+                    'real_time_factor']
+                self.get_logger().info(
+                    f'{segment.name}: {percentage:.1f}% target, '
+                    f'along={along:.3f}, cross={cross:.3f}, '
+                    f'RTF={real_time_factor:.2f}'
+                )
+                next_progress_log += self.progress_log_interval
             if termination_reached(
                     segment, initial, self.latest_ground_truth):
-                self.publish_command()
+                self.publish_command(force=True)
                 ground_truth_delta = relative_pose(
                     initial, self.latest_ground_truth
                 )
@@ -454,6 +802,8 @@ class OdometryTestRunner(Node):
                     'duration': (
                         self.latest_ground_truth.stamp - initial.stamp
                     ),
+                    'wall_duration': wall_elapsed,
+                    **progress,
                     'ground_truth_start': initial.to_dict(),
                     'ground_truth_final': self.latest_ground_truth.to_dict(),
                     'odometry_start': initial_odometry.to_dict(),
@@ -466,41 +816,70 @@ class OdometryTestRunner(Node):
 
     def execute_run(self, profile, repetition):
         """Execute one reset-isolated repetition and calculate its metrics."""
+        started_at = datetime.now(timezone.utc).isoformat()
         samples = []
         segment_results = []
+        self.command_diagnostics = self._new_command_diagnostics()
+        self.last_command = None
+        self.last_command_stamp = None
+        self.last_command_wall = None
+        self._active_segment_diagnostics = {}
         self._last_sample_stamp = None
         initial_gt, initial_odom, initial_filtered = self.reset_repetition(
             profile.settle_before)
         zero = profile.segments[0].command.__class__(0.0, 0.0, 0.0)
         samples.append(self._sample(zero))
-        profile_started = time.monotonic()
+        profile_wall_started = time.monotonic()
+        profile_sim_started = self._sim_now()
         motion_end_gt = initial_gt
         motion_end_odom = initial_odom
         motion_end_filtered = initial_filtered
+        failure = None
+        interrupted = False
         try:
             for segment in profile.segments:
                 segment_results.append(self._execute_segment(
                     segment,
                     samples,
-                    profile_started,
+                    profile_sim_started,
+                    profile_wall_started,
                     profile.profile_timeout,
                 ))
                 motion_end_gt = self.latest_ground_truth
                 motion_end_odom = self.latest_odometry
                 motion_end_filtered = self.latest_filtered
-                self.safe_stop()
-                settle_deadline = time.monotonic() + profile.settle_after
-                while time.monotonic() < settle_deadline:
-                    self.publish_command()
-                    rclpy.spin_once(
-                        self, timeout_sec=1.0 / self.sample_rate
-                    )
-                    samples.append(self._sample(zero))
+                self.safe_stop(max(
+                    profile.settle_after,
+                    self.settle_window,
+                ))
+                samples.append(self._sample(zero))
+        except EvaluationError as error:
+            failure = error
+        except KeyboardInterrupt:
+            failure = EvaluationError('interrupted by operator')
+            interrupted = True
         finally:
-            self.safe_stop()
+            if rclpy.ok():
+                try:
+                    self.safe_stop()
+                except (EvaluationError, RuntimeError) as stop_error:
+                    if failure is None:
+                        failure = stop_error
         final_gt = self.latest_ground_truth
         final_odom = self.latest_odometry
         final_filtered = self.latest_filtered
+        if failure is not None:
+            result = self._build_failure_result(
+                profile, repetition, str(failure), samples,
+                initial_gt, initial_odom, initial_filtered,
+                profile_wall_started, profile_sim_started,
+            )
+            result['started_at'] = started_at
+            result['finished_at'] = datetime.now(timezone.utc).isoformat()
+            self._write_run_artifacts(profile, repetition, samples, result)
+            if interrupted:
+                raise KeyboardInterrupt
+            return result
         ground_truth_poses = [
             Pose2D(
                 sample['ground_truth_x'], sample['ground_truth_y'],
@@ -549,6 +928,8 @@ class OdometryTestRunner(Node):
             )
         result.update({
             'timestamp': datetime.now(timezone.utc).isoformat(),
+            'started_at': started_at,
+            'finished_at': datetime.now(timezone.utc).isoformat(),
             'command': profile.segments[0].command.__dict__,
             'profile': profile.name,
             'repetition': repetition,
@@ -561,6 +942,12 @@ class OdometryTestRunner(Node):
             'settled_final_ground_truth': final_gt.to_dict(),
             'settled_final_raw_odometry': final_odom.to_dict(),
             'segments': segment_results,
+            'wall_duration': time.monotonic() - profile_wall_started,
+            'simulation_duration': (
+                self._sim_now() - profile_sim_started),
+            'timeout_basis': (
+                'simulation time with independent wall watchdog'),
+            'command_diagnostics': dict(self.command_diagnostics),
         })
         if filtered_poses is not None:
             result.update({
@@ -570,14 +957,8 @@ class OdometryTestRunner(Node):
                     motion_end_filtered.to_dict()),
                 'settled_final_filtered_odometry': final_filtered.to_dict(),
             })
-        trajectory_name = f'{profile.name}_run_{repetition:02d}.csv'
-        trajectory_path = self.output_dir / 'trajectories' / trajectory_name
-        write_trajectory(trajectory_path, samples)
-        plot_trajectory(
-            self.output_dir / 'plots' / trajectory_name.replace('.csv', '.png'),
-            profile.name,
-            samples,
-        )
+        trajectory_path = self._write_run_artifacts(
+            profile, repetition, samples, result)
         if profile.kind == 'square':
             plot_trajectory(
                 self.output_dir / 'plots' / 'square_path_closure.png',
@@ -585,6 +966,115 @@ class OdometryTestRunner(Node):
                 samples,
             )
         result['trajectory_file'] = str(trajectory_path)
+        return result
+
+    def _write_run_artifacts(self, profile, repetition, samples, result):
+        base = f'{profile.name}_run_{repetition:02d}'
+        trajectory_path = self.output_dir / 'trajectories' / (base + '.csv')
+        write_trajectory(trajectory_path, samples)
+        if len(samples) >= 2:
+            plot_trajectory(
+                self.output_dir / 'plots' / (base + '.png'),
+                profile.name,
+                samples,
+            )
+            result['trajectory_plot'] = str(
+                self.output_dir / 'plots' / (base + '.png'))
+        result['trajectory_file'] = str(trajectory_path)
+        result_path = self.output_dir / 'run_results' / (base + '.json')
+        result['run_result_file'] = str(result_path)
+        write_run_result(result_path, result)
+        return trajectory_path
+
+    def _build_failure_result(
+            self, profile, repetition, reason, samples,
+            initial_gt, initial_odom, initial_filtered,
+            wall_started, simulation_started):
+        final_gt = self.latest_ground_truth
+        final_odom = self.latest_odometry
+        final_filtered = self.latest_filtered
+        wall_duration = time.monotonic() - wall_started
+        simulation_duration = max(0.0, self._sim_now() - simulation_started)
+        segment = self._active_segment_diagnostics.get(
+            'segment', profile.segments[0].name)
+        active = next(
+            (item for item in profile.segments if item.name == segment),
+            profile.segments[0],
+        )
+        progress = command_progress(
+            active.command, initial_gt, final_gt, active.target)
+        gt_delta = relative_pose(initial_gt, final_gt)
+        raw_delta = relative_pose(initial_odom, final_odom)
+        average_speed = (
+            math.hypot(gt_delta.x, gt_delta.y) / simulation_duration
+            if simulation_duration > 0.0 else 0.0
+        )
+        stamps = {
+            'ground_truth': final_gt.stamp,
+            'raw_odometry': final_odom.stamp,
+            'filtered_odometry': (
+                final_filtered.stamp if final_filtered is not None else None),
+            'command': self.last_command_stamp,
+        }
+        valid_stamps = [
+            value for value in stamps.values() if value is not None
+        ]
+        now_sim = self._sim_now()
+        result = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'profile': profile.name,
+            'repetition': repetition,
+            'completion_status': (
+                'timeout' if (
+                    'timeout' in reason or 'watchdog' in reason
+                    or 'clock stalled' in reason
+                ) else 'failed'
+            ),
+            'timeout_status': (
+                'timeout' in reason or 'watchdog' in reason
+                or 'clock stalled' in reason
+            ),
+            'reason': reason,
+            'wall_duration': wall_duration,
+            'simulation_duration': simulation_duration,
+            'duration': simulation_duration,
+            'timeout_basis': (
+                'simulation time with independent wall watchdog'),
+            'segment': segment,
+            'sample_count': len(samples),
+            'last_command': self.last_command,
+            'last_command_stamp': self.last_command_stamp,
+            'initial_ground_truth_pose': initial_gt.to_dict(),
+            'last_ground_truth_pose': final_gt.to_dict(),
+            'ground_truth_displacement': gt_delta.to_dict(),
+            'initial_raw_odometry': initial_odom.to_dict(),
+            'last_raw_odometry': final_odom.to_dict(),
+            'raw_displacement': raw_delta.to_dict(),
+            'last_message_timestamps': stamps,
+            'message_ages': {
+                name: (now_sim - stamp if stamp is not None else None)
+                for name, stamp in stamps.items()
+            },
+            'maximum_source_skew': (
+                max(valid_stamps) - min(valid_stamps)
+                if valid_stamps else None
+            ),
+            'target_displacement_or_rotation': active.target,
+            **progress,
+            'average_ground_truth_speed': average_speed,
+            'recent_ground_truth_speed': self.ground_truth_speed,
+            'recent_raw_odometry_speed': self.raw_odometry_speed,
+            'command_diagnostics': dict(self.command_diagnostics),
+            'segment_diagnostics': dict(self._active_segment_diagnostics),
+            'command': profile.segments[0].command.__dict__,
+        }
+        if initial_filtered is not None and final_filtered is not None:
+            result.update({
+                'initial_filtered_odometry': initial_filtered.to_dict(),
+                'last_filtered_odometry': final_filtered.to_dict(),
+                'filtered_displacement': relative_pose(
+                    initial_filtered, final_filtered).to_dict(),
+            })
         return result
 
     @staticmethod
@@ -600,15 +1090,33 @@ class OdometryTestRunner(Node):
         except (OSError, subprocess.SubprocessError, IndexError):
             return 'unavailable'
 
+    def _repository_commit(self):
+        """Return the commit owning the repository-local output directory."""
+        output = self.output_dir.resolve()
+        for directory in (output, *output.parents):
+            if (directory / '.git').exists():
+                return self._version(
+                    ['git', '-C', str(directory), 'rev-parse', 'HEAD'])
+        return 'unavailable'
+
     def run_suite(self):
         """Run selected profiles, preserving failures in the final report."""
         self.wait_until_ready()
-        selected = (
-            self.profiles.values()
-            if self.selected_profile == 'all'
-            else (self.profiles[self.selected_profile],)
-        )
+        if self.profile_sequence_names:
+            selected = [
+                self.profiles[name] for name in self.profile_sequence_names]
+        else:
+            selected = list(
+                self.profiles.values()
+                if self.selected_profile == 'all'
+                else (self.profiles[self.selected_profile],)
+            )
+        selected = ordered_profiles(
+            selected, self.profile_order, self.random_seed)
+        actual_execution_order = [profile.name for profile in selected]
         runs = []
+        run_counters = {
+            profile.name: self.repetition_offset for profile in selected}
         try:
             for profile in selected:
                 repetitions = (
@@ -616,18 +1124,27 @@ class OdometryTestRunner(Node):
                     if self.repetitions_override > 0
                     else profile.repetitions
                 )
-                for repetition in range(1, repetitions + 1):
+                for _ in range(repetitions):
+                    repetition = run_counters.get(profile.name, 0) + 1
+                    run_counters[profile.name] = repetition
                     self.get_logger().info(
                         f'Running {profile.name}, repetition {repetition}/'
-                        f'{repetitions}'
+                        f'{self.repetition_offset + repetitions}'
                     )
                     run_started = time.monotonic()
+                    run_started_at = datetime.now(timezone.utc).isoformat()
                     try:
                         runs.append(self.execute_run(profile, repetition))
                     except EvaluationError as error:
                         self.publish_command()
                         runs.append({
-                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                            'timestamp': (
+                                datetime.now(timezone.utc).isoformat()
+                            ),
+                            'started_at': run_started_at,
+                            'finished_at': (
+                                datetime.now(timezone.utc).isoformat()
+                            ),
                             'profile': profile.name,
                             'repetition': repetition,
                             'completion_status': (
@@ -640,24 +1157,43 @@ class OdometryTestRunner(Node):
                             'command': (
                                 profile.segments[0].command.__dict__),
                         })
+                        failed = runs[-1]
+                        result_path = (
+                            self.output_dir / 'run_results'
+                            / f'{profile.name}_run_{repetition:02d}.json'
+                        )
+                        failed['run_result_file'] = str(result_path)
+                        write_run_result(result_path, failed)
                         self.get_logger().error(str(error))
         finally:
-            try:
-                self.safe_stop()
-            except EvaluationError as error:
-                self.get_logger().error(f'Final safe stop failed: {error}')
+            if rclpy.ok():
+                try:
+                    self.safe_stop()
+                except (EvaluationError, RuntimeError) as error:
+                    self.get_logger().error(f'Final safe stop failed: {error}')
 
         configuration = {
             'config_file': self.config_file,
             'selected_profile': self.selected_profile,
+            'profile_sequence': self.profile_sequence_names,
             'repetitions_override': self.repetitions_override,
+            'repetition_offset': self.repetition_offset,
             'sample_rate': self.sample_rate,
             'evaluation_mode': self.evaluation_mode,
+            'timeout_basis': (
+                'simulation time with independent wall watchdog'),
+            'wall_watchdog_factor': self.wall_watchdog_factor,
+            'minimum_wall_watchdog': self.minimum_wall_watchdog,
+            'clock_stall_timeout': self.clock_stall_timeout,
+            'motion_start_timeout': self.motion_start_timeout,
+            'profile_order': self.profile_order,
+            'random_seed': self.random_seed,
+            'actual_execution_order': actual_execution_order,
         }
         metadata = {
-            'git_commit': self._version(
-                ['git', 'rev-parse', 'HEAD']
-            ),
+            'git_commit': self._repository_commit(),
+            'evaluation_mode': self.evaluation_mode,
+            'localization_enabled': self.localization_enabled,
             'ros_distribution': os.environ.get('ROS_DISTRO', 'unknown'),
             'gazebo_version': self._version(['gz', 'sim', '--version']),
             'world_name': self.world,
@@ -673,6 +1209,15 @@ class OdometryTestRunner(Node):
                 f'identity-selected entity {self.robot_entity}'
             ),
             'pose_reset_service': self._string('set_pose_service'),
+            'model_state_reset_service': None,
+            'actual_execution_order': actual_execution_order,
+            'reset_behavior': (
+                'continuous stop, explicit Gazebo pose placement, fresh '
+                'ground-truth/raw/filtered samples, clock advancement, and '
+                'continuous settle; joint, controller-odometry, and EKF '
+                'state are not reset, so multi-profile campaigns use the '
+                'fresh-process campaign runner'
+            ),
         }
         report = build_report(metadata, configuration, runs)
         write_report(self.output_dir, report)
@@ -708,7 +1253,7 @@ def main(args=None):
                     pass
             try:
                 node.destroy_node()
-            except RuntimeError:
+            except (KeyboardInterrupt, RuntimeError):
                 pass
         if rclpy.ok():
             rclpy.shutdown()
