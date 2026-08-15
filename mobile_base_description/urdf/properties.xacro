@@ -19,9 +19,14 @@
   <xacro:property name="roller_mass" value="${wheel_mass * 0.03}"/>
   <xacro:property name="wheel_hub_mass"
                   value="${wheel_mass - roller_count * roller_mass}"/>
-  <xacro:property name="roller_joint_damping" value="0.001"/>
-  <xacro:property name="roller_joint_friction" value="0.00005"/>
-  <xacro:property name="roller_contact_mu" value="0.8"/>
+  <xacro:property name="roller_joint_damping"
+                  value="$(arg roller_joint_damping)"/>
+  <xacro:property name="roller_joint_friction"
+                  value="$(arg roller_joint_friction)"/>
+  <xacro:property name="roller_contact_mu"
+                  value="$(arg roller_contact_mu)"/>
+  <xacro:property name="roller_collision_model"
+                  value="$(arg roller_collision_model)"/>
   <xacro:property name="roller_contact_kp" value="100000.0"/>
   <xacro:property name="roller_contact_kd" value="10.0"/>
 

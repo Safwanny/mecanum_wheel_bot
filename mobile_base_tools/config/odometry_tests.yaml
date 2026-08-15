@@ -179,6 +179,33 @@ profiles:
     settle_after: 1.0
     repetitions: 1
 
+  long_forward_5m:
+    kind: longitudinal
+    command: {linear_x: 0.10, linear_y: 0.00, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 5.00}
+    profile_timeout: 75.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  long_strafe_left_5m:
+    kind: lateral
+    command: {linear_x: 0.00, linear_y: 0.10, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 5.00}
+    profile_timeout: 75.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  long_diagonal_forward_right_5m:
+    kind: diagonal
+    command: {linear_x: 0.07, linear_y: -0.07, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 5.00}
+    profile_timeout: 75.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
   square_1m:
     kind: square
     profile_timeout: 90.0

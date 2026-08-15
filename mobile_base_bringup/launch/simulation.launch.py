@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -146,6 +147,11 @@ def _gazebo_environment():
 
 
 def _resolve_world(context, worlds_directory):
+    collision_model = LaunchConfiguration(
+        'roller_collision_model').perform(context)
+    if collision_model not in ('cylinder', 'barrel'):
+        raise RuntimeError(
+            'roller_collision_model must be cylinder or barrel')
     requested = LaunchConfiguration('world').perform(context)
     requested_path = Path(requested).expanduser()
     if requested_path.is_absolute():
@@ -160,8 +166,30 @@ def _resolve_world(context, worlds_directory):
     render_engine = LaunchConfiguration('render_engine').perform(context)
     if render_engine not in ('ogre', 'ogre2'):
         raise RuntimeError("render_engine must be 'ogre' or 'ogre2'")
+    max_step_text = LaunchConfiguration(
+        'physics_max_step_size').perform(context)
+    try:
+        max_step_size = float(max_step_text)
+    except ValueError as error:
+        raise RuntimeError(
+            'physics_max_step_size must be a positive finite number'
+        ) from error
+    if not math.isfinite(max_step_size) or max_step_size <= 0.0:
+        raise RuntimeError(
+            'physics_max_step_size must be a positive finite number')
+
+    tree = ET.parse(resolved)
+    physics = tree.findall('./world/physics')
+    if len(physics) != 1:
+        raise RuntimeError(
+            f'Expected one physics element in {resolved}, found '
+            f'{len(physics)}')
+    max_step = physics[0].find('max_step_size')
+    if max_step is None:
+        max_step = ET.SubElement(physics[0], 'max_step_size')
+    max_step.text = max_step_text
+
     if render_engine != 'ogre2':
-        tree = ET.parse(resolved)
         sensors_plugins = [
             plugin for plugin in tree.findall('.//plugin')
             if plugin.attrib.get('name') == 'gz::sim::systems::Sensors'
@@ -175,11 +203,11 @@ def _resolve_world(context, worlds_directory):
         if engine is None:
             engine = ET.SubElement(sensors_plugins[0], 'render_engine')
         engine.text = render_engine
-        generated = Path(
-            f'/tmp/mobile_base_world_{os.getpid()}_{render_engine}.sdf'
-        )
-        tree.write(generated, encoding='utf-8', xml_declaration=True)
-        resolved = generated
+    generated = Path(
+        f'/tmp/mobile_base_world_{os.getpid()}_{render_engine}.sdf'
+    )
+    tree.write(generated, encoding='utf-8', xml_declaration=True)
+    resolved = generated
     context.launch_configurations['resolved_world'] = str(resolved.resolve())
     return []
 
@@ -217,6 +245,22 @@ def generate_launch_description():
                 model,
                 ' use_gazebo:=true controllers_file:=',
                 controllers,
+                ' roller_joint_damping:=',
+                LaunchConfiguration('roller_joint_damping'),
+                ' roller_joint_friction:=',
+                LaunchConfiguration('roller_joint_friction'),
+                ' roller_contact_mu:=',
+                LaunchConfiguration('roller_contact_mu'),
+                ' roller_collision_model:=',
+                LaunchConfiguration('roller_collision_model'),
+                ' front_left_roller_phase:=',
+                LaunchConfiguration('front_left_roller_phase'),
+                ' front_right_roller_phase:=',
+                LaunchConfiguration('front_right_roller_phase'),
+                ' rear_right_roller_phase:=',
+                LaunchConfiguration('rear_right_roller_phase'),
+                ' rear_left_roller_phase:=',
+                LaunchConfiguration('rear_left_roller_phase'),
             ]
         ),
         value_type=str,
@@ -230,6 +274,22 @@ def generate_launch_description():
             controllers,
             '--output',
             simulation_sdf,
+            '--roller-joint-damping',
+            LaunchConfiguration('roller_joint_damping'),
+            '--roller-joint-friction',
+            LaunchConfiguration('roller_joint_friction'),
+            '--roller-contact-mu',
+            LaunchConfiguration('roller_contact_mu'),
+            '--roller-collision-model',
+            LaunchConfiguration('roller_collision_model'),
+            '--front-left-roller-phase',
+            LaunchConfiguration('front_left_roller_phase'),
+            '--front-right-roller-phase',
+            LaunchConfiguration('front_right_roller_phase'),
+            '--rear-right-roller-phase',
+            LaunchConfiguration('rear_right_roller_phase'),
+            '--rear-left-roller-phase',
+            LaunchConfiguration('rear_left_roller_phase'),
         ],
         output='screen',
     )
@@ -435,6 +495,11 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                'physics_max_step_size',
+                default_value='0.001',
+                description='Gazebo physics integration step in seconds.',
+            ),
+            DeclareLaunchArgument(
                 'localization',
                 default_value='true',
                 description=(
@@ -447,6 +512,22 @@ def generate_launch_description():
                 default_value='true',
                 description='Start the mecanum ros2_control controller.',
             ),
+            DeclareLaunchArgument(
+                'roller_joint_damping', default_value='0.0'),
+            DeclareLaunchArgument(
+                'roller_joint_friction', default_value='0.0'),
+            DeclareLaunchArgument(
+                'roller_contact_mu', default_value='0.8'),
+            DeclareLaunchArgument(
+                'roller_collision_model', default_value='barrel'),
+            DeclareLaunchArgument(
+                'front_left_roller_phase', default_value='0.22193969'),
+            DeclareLaunchArgument(
+                'front_right_roller_phase', default_value='0.48030419'),
+            DeclareLaunchArgument(
+                'rear_right_roller_phase', default_value='0.19668582'),
+            DeclareLaunchArgument(
+                'rear_left_roller_phase', default_value='0.24790784'),
             DeclareLaunchArgument('x', default_value='0.0'),
             DeclareLaunchArgument('y', default_value='0.0'),
             DeclareLaunchArgument('z', default_value='0.08'),

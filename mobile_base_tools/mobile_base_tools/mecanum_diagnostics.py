@@ -251,3 +251,51 @@ def classify_root_cause(wheel_metrics, chassis_metrics):
         'normalized_odometry_error': odometry_error,
         'threshold': 0.10,
     }
+
+
+def multi_segment_loop_closure_metrics(run_metrics, sample_count):
+    """Summarize loop closure without assuming one constant body command."""
+    required = (
+        'ground_truth_delta_x', 'ground_truth_delta_y',
+        'ground_truth_delta_yaw', 'odometry_delta_x', 'odometry_delta_y',
+        'odometry_delta_yaw', 'position_error_norm', 'yaw_error',
+        'distance_travelled_ground_truth', 'distance_travelled_odometry',
+    )
+    if not all(isinstance(run_metrics.get(key), (int, float))
+               for key in required):
+        raise ValueError('loop-closure run metrics are incomplete')
+    return {
+        'sample_count': sample_count,
+        'measurement_scope': 'multi_segment_loop_closure',
+        'ground_truth_loop_closure_translation_metres': math.hypot(
+            run_metrics['ground_truth_delta_x'],
+            run_metrics['ground_truth_delta_y']),
+        'raw_odometry_loop_closure_translation_metres': math.hypot(
+            run_metrics['odometry_delta_x'],
+            run_metrics['odometry_delta_y']),
+        'odometry_endpoint_error_metres': run_metrics[
+            'position_error_norm'],
+        'ground_truth_loop_closure_yaw_radians': run_metrics[
+            'ground_truth_delta_yaw'],
+        'raw_odometry_loop_closure_yaw_radians': run_metrics[
+            'odometry_delta_yaw'],
+        'odometry_yaw_error_radians': run_metrics['yaw_error'],
+        'ground_truth_path_length_metres': run_metrics[
+            'distance_travelled_ground_truth'],
+        'raw_odometry_path_length_metres': run_metrics[
+            'distance_travelled_odometry'],
+    }
+
+
+def classify_multi_segment(wheel_metrics):
+    """Return wheel evidence while declining an invalid single-command case."""
+    wheel_only = classify_root_cause(wheel_metrics, {})
+    return {
+        **wheel_only,
+        'case': 'not_applicable',
+        'diagnosis': (
+            'single-command Case A/B/C/D classification is not applicable '
+            'to multi-segment profiles; use loop-closure metrics'),
+        'normalized_chassis_error': None,
+        'normalized_odometry_error': None,
+    }

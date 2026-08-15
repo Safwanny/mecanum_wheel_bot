@@ -32,6 +32,17 @@ HUB_MASS = WHEEL_MASS - 10 * ROLLER_MASS
 WHEELBASE = 0.150
 WHEEL_SEPARATION = 0.134
 TOLERANCE = 1e-6
+BARREL_SPHERES = {
+    'barrel_center_collision': (0.0, 0.00569443),
+    'barrel_negative_3mm_collision': (-0.003, 0.00558),
+    'barrel_positive_3mm_collision': (0.003, 0.00558),
+    'barrel_negative_5p8mm_collision': (-0.0058, 0.00526),
+    'barrel_positive_5p8mm_collision': (0.0058, 0.00526),
+    'barrel_negative_8p2mm_collision': (-0.0082, 0.0048),
+    'barrel_positive_8p2mm_collision': (0.0082, 0.0048),
+    'barrel_negative_10p8mm_collision': (-0.0108, 0.00405),
+    'barrel_positive_10p8mm_collision': (0.0108, 0.00405),
+}
 
 WHEELS = {
     'front_left': {
@@ -162,13 +173,15 @@ def stl_bounds(path):
     return tuple(minimum), tuple(maximum)
 
 
-def load_robot(xacro_file):
+def load_robot(xacro_file, mappings=None):
+    mappings = mappings or {}
     generated = subprocess.run(
         [
             'xacro',
             xacro_file,
             'use_gazebo:=true',
             'controllers_file:=unused.yaml',
+            *(f'{name}:={value}' for name, value in mappings.items()),
         ],
         check=True,
         capture_output=True,
@@ -222,10 +235,8 @@ def main():
         assert 'visual_rpy' in call.attrib
         assert call.attrib['mesh'] == expected['mesh']
         assert int(call.attrib['roller_handedness']) == expected['handedness']
-        assert math.isclose(
-            float(call.attrib['roller_phase']), expected['phase'],
-            abs_tol=TOLERANCE,
-        )
+        phase_argument = wheel_name_to_phase_argument(call.attrib['name'])
+        assert call.attrib['roller_phase'] == f'$(arg {phase_argument})'
         assert math.isclose(
             float(call.attrib['roller_axial_offset']),
             expected['axial_offset'],
@@ -400,20 +411,23 @@ def main():
                 abs_tol=TOLERANCE,
             )
 
-            collision = roller_link.find('collision')
-            assert collision is not None
-            cylinder = collision.find('geometry/cylinder')
-            assert cylinder is not None
-            assert math.isclose(
-                float(cylinder.attrib['radius']),
-                ROLLER_RADIUS,
-                abs_tol=TOLERANCE,
-            )
-            assert math.isclose(
-                float(cylinder.attrib['length']),
-                ROLLER_LENGTH,
-                abs_tol=TOLERANCE,
-            )
+            collisions = roller_link.findall('collision')
+            assert len(collisions) == 9
+            assert {collision.attrib['name'] for collision in collisions} \
+                == set(BARREL_SPHERES)
+            for collision in collisions:
+                axial_position, radius = BARREL_SPHERES[
+                    collision.attrib['name']]
+                sphere = collision.find('geometry/sphere')
+                assert sphere is not None
+                assert math.isclose(
+                    float(sphere.attrib['radius']), radius,
+                    abs_tol=TOLERANCE)
+                origin = collision.find('origin')
+                actual_position = 0.0 if origin is None else vector(
+                    origin.attrib['xyz'])[2]
+                assert math.isclose(
+                    actual_position, axial_position, abs_tol=TOLERANCE)
 
             inertial = roller_link.find('inertial')
             mass = float(inertial.find('mass').attrib['value'])
@@ -424,10 +438,10 @@ def main():
 
             dynamics = roller_joint.find('dynamics')
             assert math.isclose(
-                float(dynamics.attrib['damping']), 0.001, abs_tol=TOLERANCE
+                float(dynamics.attrib['damping']), 0.0, abs_tol=TOLERANCE
             )
             assert math.isclose(
-                float(dynamics.attrib['friction']), 0.00005,
+                float(dynamics.attrib['friction']), 0.0,
                 abs_tol=TOLERANCE,
             )
 
@@ -500,9 +514,58 @@ def main():
         + (urdf_directory / 'macros' / 'mecanum_rollers.xacro').read_text()
     )
     assert ('traction' + '_sign') not in relevant_sources
-    assert '<sphere' not in relevant_sources
     assert '<fdir1' not in relevant_sources
     assert '>100<' not in relevant_sources
+
+    calibrated = load_robot(xacro_file, {
+        'roller_joint_damping': '0.0',
+        'roller_joint_friction': '0.0',
+        'roller_contact_mu': '0.6',
+        'front_left_roller_phase': '0.3',
+        'front_right_roller_phase': '0.3',
+        'rear_right_roller_phase': '0.3',
+        'rear_left_roller_phase': '0.3',
+    })
+    calibrated_joints = {
+        joint.attrib['name']: joint for joint in calibrated.findall('joint')}
+    calibrated_gazebo = {
+        gazebo.attrib['reference']: gazebo
+        for gazebo in calibrated.findall('gazebo')
+        if 'reference' in gazebo.attrib}
+    for wheel_name in WHEELS:
+        joint = calibrated_joints[f'{wheel_name}_roller_0_joint']
+        dynamics = joint.find('dynamics')
+        assert float(dynamics.attrib['damping']) == 0.0
+        assert float(dynamics.attrib['friction']) == 0.0
+        theta = math.atan2(*reversed(vector(joint.find('origin').attrib['xyz'])[::2]))
+        assert abs(angle_error(theta, 0.3)) < TOLERANCE
+        gazebo = calibrated_gazebo[f'{wheel_name}_roller_0_link']
+        assert math.isclose(float(gazebo.find('mu1').text), 0.6)
+        assert math.isclose(float(gazebo.find('mu2').text), 0.6)
+
+    cylinder_robot = load_robot(xacro_file, {
+        'roller_collision_model': 'cylinder',
+    })
+    cylinder_roller_links = [
+        link for link in cylinder_robot.findall('link')
+        if '_roller_' in link.attrib['name']
+    ]
+    assert len(cylinder_roller_links) == 40
+    for link in cylinder_roller_links:
+        collisions = link.findall('collision')
+        assert len(collisions) == 1
+        cylinder = collisions[0].find('geometry/cylinder')
+        assert cylinder is not None
+        assert math.isclose(
+            float(cylinder.attrib['radius']),
+            ROLLER_RADIUS,
+            abs_tol=TOLERANCE,
+        )
+        assert math.isclose(
+            float(cylinder.attrib['length']),
+            ROLLER_LENGTH,
+            abs_tol=TOLERANCE,
+        )
 
 
 def assert_positive_finite_inertia(inertial):
@@ -512,6 +575,10 @@ def assert_positive_finite_inertia(inertial):
         assert value > 0.0 and math.isfinite(value)
     for attribute in ('ixy', 'ixz', 'iyz'):
         assert math.isfinite(float(inertia.attrib[attribute]))
+
+
+def wheel_name_to_phase_argument(wheel_name):
+    return wheel_name + '_roller_phase'
 
 
 if __name__ == '__main__':

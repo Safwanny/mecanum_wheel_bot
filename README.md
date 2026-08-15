@@ -15,10 +15,10 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 
 The packages are independent of the existing arm stack.
 
-## Phase 1 status
+## Project status
 
-**Status: Phase 1 complete.** The mobile-base software baseline is established
-and ready for Phase 2. Phase 1 delivered the mecanum simulation and control
+**Status: Phase 1 and the Phase 2 mapping/localization stack are implemented.**
+Phase 1 delivered the mecanum simulation and control
 stack, raw wheel odometry, fused wheel/IMU odometry, explicit TF ownership,
 timestamp and TF contract validation, repeatable motion evaluation, and an
 isolated per-repetition campaign lifecycle with bounded cleanup and resumable,
@@ -35,8 +35,13 @@ The completed raw and fused campaigns support these engineering conclusions:
 - no controller, EKF, geometry, trajectory, sensor-rate, or evaluation-threshold
   tuning was required to close Phase 1.
 
-Phase 2 builds on this fixed baseline with SLAM Toolbox mapping and saved-map
-localization. Full Nav2 planning and autonomous navigation remain later work.
+Phase 2 adds SLAM Toolbox mapping and saved-map AMCL localization. The physical
+roller contact model has also been calibrated against Gazebo ground truth: the
+original 11--21% lateral/diagonal Case B errors are now 0.72--4.86% across the
+nominal primitive campaign. Full results, rejected experiments, long-run
+limitations, and reproduction commands are in
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Full Nav2
+planning and autonomous navigation remain later work.
 
 ## Phase 2: mapping and saved-map localization
 
@@ -419,8 +424,8 @@ arbitration, velocity smoothing, or any other autonomous-navigation component.
 URDF and controller values use SI units: metres, kilograms, seconds, and radians.
 The original CAD file remains at `src/3D_Builds/ROS2_transfer.stl` and is not loaded
 at runtime. The base model uses one parametric body link. The mecanum wheels use four
-position-specific STL files for visual appearance and primitive cylinders on the
-passive roller links for collision.
+position-specific STL files for visual appearance and tapered, sphere-primitive
+barrels on the passive roller links for collision.
 
 The wheel meshes live in `src/mobile_base/meshes/wheels/` and are installed through
 the description package. Gazebo receives runtime-generated `file://` mesh URIs from
@@ -521,6 +526,9 @@ ros2 launch mobile_base_bringup simulation.launch.py
 `world` accepts an installed world name (with or without `.sdf`) or an absolute
 SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
 `start_controller`, `localization`, `render_engine`, `x`, `y`, `z`, and `yaw`.
+Calibration experiments additionally expose roller damping, joint friction,
+contact friction, collision model, the four roller phases, and physics maximum
+step size; normal launches use the validated defaults.
 Phase 1 intentionally supports one un-namespaced robot. A misleading partial
 `namespace` argument was removed rather than implying multi-robot support.
 
@@ -554,13 +562,21 @@ For roller angle `theta`, the wheel axle is `a=(0,1,0)` and the increasing-angle
 tangent is `t=(-sin(theta),0,cos(theta))`. The roller axis is
 `cos(pi/4)*a + handedness*sin(pi/4)*t`. The roller child frame maps local Z onto this
 axis, allowing every passive joint to use a normalized local `axis="0 0 1"` while its
-cylinder collision and inertia use the same frame.
+collision envelope and inertia use the same frame.
 
 The original `0.12 kg` wheel assembly mass is preserved rather than duplicated:
 the collision-free driven hub is `0.084 kg`, and each of its ten rollers is
-`0.0036 kg`. Passive joint damping is `0.001` and friction is `0.00005`. Each roller
-uses isotropic contact friction `mu1=mu2=0.8`, contact stiffness `100000`, and contact
-damping `10`. There is no wheel-level `fdir1` or anisotropic contact approximation.
+`0.0036 kg`. Calibrated passive joint damping and friction are both `0.0`.
+Each roller uses isotropic contact friction `mu1=mu2=0.8`, contact stiffness
+`100000`, and contact damping `10`. There is no wheel-level `fdir1` or
+anisotropic contact approximation.
+
+The collision envelope follows the measured tapered roller shape using nine
+overlapping spheres at axial stations `0`, `±3.0`, `±5.8`, `±8.2`, and
+`±10.8 mm`, with radii decreasing from `5.69443` to `4.05 mm`. This retains the
+40 passive roller joints while avoiding unsupported dynamic triangle-mesh
+contact in DART. Set `roller_collision_model:=cylinder` only to reproduce the
+pre-calibration comparison model.
 
 Only the four driven wheel joints have velocity command interfaces. All 44 movable
 joints—the four wheels and 40 rollers—have position and velocity state interfaces.
@@ -576,9 +592,10 @@ The STL wheel remains one visual attached to the hub link. Consequently, its ren
 rollers do not visibly spin independently even though the 40 collision-only roller
 links rotate and report state. The corrected inner/outer visual face orientation does
 not change those physical contacts. The explicit model adds 40 links, 40 joints, 40
-collision bodies, and 80 state interfaces; primitive cylinders keep its simulation
-cost bounded, but it is still more CPU-intensive than a one-body contact
-approximation.
+passive roller bodies, 360 primitive collision shapes, and 80 state interfaces.
+It is more CPU-intensive than the old one-cylinder-per-roller model or a
+one-body contact approximation; measured calibrated campaign real-time factor
+is about 0.82--0.89 on the development machine.
 
 The recursive roller organization was informed by
 [`DaiGuard/fuji_mecanum`](https://github.com/DaiGuard/fuji_mecanum), an MIT-licensed

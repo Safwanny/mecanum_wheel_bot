@@ -4,9 +4,11 @@ import pytest
 
 from mobile_base_tools.mecanum_diagnostics import (
     chassis_motion_metrics,
+    classify_multi_segment,
     classify_root_cause,
     expected_wheel_velocities,
     ideal_planar_pose,
+    multi_segment_loop_closure_metrics,
     wheel_tracking_metrics,
 )
 
@@ -76,3 +78,35 @@ def test_classification_distinguishes_wheels_contacts_and_odometry():
     odometry = chassis_motion_metrics([
         sample(0.0), sample(1.0, odom_x=0.5)], 'longitudinal')
     assert classify_root_cause(good_wheels, odometry)['case'] == 'C'
+
+
+def test_multi_segment_metrics_report_loop_closure_without_case_label():
+    wheels = wheel_tracking_metrics([sample(0.0), sample(1.0)])
+    run = {
+        'ground_truth_delta_x': 0.003,
+        'ground_truth_delta_y': -0.004,
+        'ground_truth_delta_yaw': 0.01,
+        'odometry_delta_x': 0.006,
+        'odometry_delta_y': -0.012,
+        'odometry_delta_yaw': 0.015,
+        'position_error_norm': math.hypot(0.003, -0.008),
+        'yaw_error': 0.005,
+        'distance_travelled_ground_truth': 3.96,
+        'distance_travelled_odometry': 4.01,
+    }
+    metrics = multi_segment_loop_closure_metrics(run, 123)
+    assert metrics['measurement_scope'] == 'multi_segment_loop_closure'
+    assert metrics['sample_count'] == 123
+    assert metrics['ground_truth_loop_closure_translation_metres'] \
+        == pytest.approx(0.005)
+    assert metrics['odometry_endpoint_error_metres'] \
+        == pytest.approx(math.hypot(0.003, -0.008))
+    classification = classify_multi_segment(wheels)
+    assert classification['case'] == 'not_applicable'
+    assert classification['normalized_chassis_error'] is None
+    assert classification['maximum_wheel_normalized_rmse'] == 0.0
+
+
+def test_multi_segment_metrics_reject_incomplete_results():
+    with pytest.raises(ValueError, match='incomplete'):
+        multi_segment_loop_closure_metrics({}, 0)

@@ -26,12 +26,51 @@
                       value="${atan2(sqrt(axis_dx * axis_dx + axis_dy * axis_dy), axis_dz)}"/>
 
       <link name="${prefix}${wheel_name}_roller_${index}_link">
-        <collision>
-          <origin xyz="0 0 0" rpy="0 0 0"/>
-          <geometry>
-            <cylinder radius="${roller_radius}" length="${roller_length}"/>
-          </geometry>
-        </collision>
+        <xacro:if value="${roller_collision_model == 'cylinder'}">
+          <collision name="cylinder_collision">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+              <cylinder radius="${roller_radius}" length="${roller_length}"/>
+            </geometry>
+          </collision>
+        </xacro:if>
+        <xacro:if value="${roller_collision_model == 'barrel'}">
+          <collision name="barrel_center_collision">
+            <geometry><sphere radius="0.00569443"/></geometry>
+          </collision>
+          <collision name="barrel_negative_3mm_collision">
+            <origin xyz="0 0 -0.003" rpy="0 0 0"/>
+            <geometry><sphere radius="0.00558"/></geometry>
+          </collision>
+          <collision name="barrel_positive_3mm_collision">
+            <origin xyz="0 0 0.003" rpy="0 0 0"/>
+            <geometry><sphere radius="0.00558"/></geometry>
+          </collision>
+          <collision name="barrel_negative_5p8mm_collision">
+            <origin xyz="0 0 -0.0058" rpy="0 0 0"/>
+            <geometry><sphere radius="0.00526"/></geometry>
+          </collision>
+          <collision name="barrel_positive_5p8mm_collision">
+            <origin xyz="0 0 0.0058" rpy="0 0 0"/>
+            <geometry><sphere radius="0.00526"/></geometry>
+          </collision>
+          <collision name="barrel_negative_8p2mm_collision">
+            <origin xyz="0 0 -0.0082" rpy="0 0 0"/>
+            <geometry><sphere radius="0.0048"/></geometry>
+          </collision>
+          <collision name="barrel_positive_8p2mm_collision">
+            <origin xyz="0 0 0.0082" rpy="0 0 0"/>
+            <geometry><sphere radius="0.0048"/></geometry>
+          </collision>
+          <collision name="barrel_negative_10p8mm_collision">
+            <origin xyz="0 0 -0.0108" rpy="0 0 0"/>
+            <geometry><sphere radius="0.00405"/></geometry>
+          </collision>
+          <collision name="barrel_positive_10p8mm_collision">
+            <origin xyz="0 0 0.0108" rpy="0 0 0"/>
+            <geometry><sphere radius="0.00405"/></geometry>
+          </collision>
+        </xacro:if>
         <xacro:cylinder_inertial mass="${roller_mass}"
                                  radius="${roller_radius}"
                                  length="${roller_length}">

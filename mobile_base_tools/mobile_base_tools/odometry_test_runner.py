@@ -14,8 +14,10 @@ from controller_manager_msgs.srv import ListControllers
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mobile_base_tools.mecanum_diagnostics import (
     chassis_motion_metrics,
+    classify_multi_segment,
     classify_root_cause,
     expected_wheel_velocities,
+    multi_segment_loop_closure_metrics,
     wheel_tracking_metrics,
 )
 from mobile_base_tools.motion_profiles import load_profiles
@@ -117,7 +119,18 @@ class OdometryTestRunner(Node):
             'imu_topic': '/imu/data',
             'wheels_radius': 0.03074443,
             'center_projection_sum': 0.142,
+            'roller_joint_damping': 0.0,
+            'roller_joint_friction': 0.0,
+            'roller_contact_mu': 0.8,
+            'roller_collision_model': 'barrel',
+            'physics_max_step_size': 0.001,
+            'front_left_roller_phase': 0.22193969,
+            'front_right_roller_phase': 0.48030419,
+            'rear_right_roller_phase': 0.19668582,
+            'rear_left_roller_phase': 0.24790784,
             'command_frame': 'base_link',
+            'calibration_baseline_commit': (
+                'e7158321d0e056b07feb5354547fdcb00b59c461'),
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -172,6 +185,22 @@ class OdometryTestRunner(Node):
         self.wheels_radius = self._positive('wheels_radius')
         self.center_projection_sum = self._positive(
             'center_projection_sum')
+        self.roller_joint_damping = self._nonnegative(
+            'roller_joint_damping')
+        self.roller_joint_friction = self._nonnegative(
+            'roller_joint_friction')
+        self.roller_contact_mu = self._positive('roller_contact_mu')
+        self.roller_collision_model = self._string(
+            'roller_collision_model')
+        if self.roller_collision_model not in ('cylinder', 'barrel'):
+            raise ValueError(
+                'roller_collision_model must be cylinder or barrel')
+        self.physics_max_step_size = self._positive(
+            'physics_max_step_size')
+        self.roller_phases = {
+            wheel: self._finite(f'{wheel}_roller_phase')
+            for wheel in (
+                'front_left', 'front_right', 'rear_right', 'rear_left')}
         self.world = self._string('world')
         self.robot_entity = self._string('robot_entity')
         self.command_frame = self._string('command_frame')
@@ -285,6 +314,18 @@ class OdometryTestRunner(Node):
         value = float(self.get_parameter(name).value)
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f'{name} must be finite and positive')
+        return value
+
+    def _nonnegative(self, name):
+        value = self._finite(name)
+        if value < 0.0:
+            raise ValueError(f'{name} must be nonnegative')
+        return value
+
+    def _finite(self, name):
+        value = float(self.get_parameter(name).value)
+        if not math.isfinite(value):
+            raise ValueError(f'{name} must be finite')
         return value
 
     @staticmethod
@@ -1097,17 +1138,33 @@ class OdometryTestRunner(Node):
             'command_diagnostics': dict(self.command_diagnostics),
         })
         wheel_metrics = wheel_tracking_metrics(samples)
-        chassis_metrics = chassis_motion_metrics(samples, profile.kind)
+        if profile.kind == 'square':
+            chassis_metrics = multi_segment_loop_closure_metrics(
+                result, len(samples))
+            root_cause = classify_multi_segment(wheel_metrics)
+        else:
+            chassis_metrics = chassis_motion_metrics(samples, profile.kind)
+            root_cause = classify_root_cause(
+                wheel_metrics, chassis_metrics)
         result['mecanum_diagnostics'] = {
             'measurement_only': True,
             'kinematics': {
                 'wheels_radius': self.wheels_radius,
                 'center_projection_sum': self.center_projection_sum,
             },
+            'roller_configuration': {
+                'joint_damping': self.roller_joint_damping,
+                'joint_friction': self.roller_joint_friction,
+                'contact_mu': self.roller_contact_mu,
+                'collision_model': self.roller_collision_model,
+                'phases': self.roller_phases,
+            },
+            'physics_configuration': {
+                'max_step_size': self.physics_max_step_size,
+            },
             'wheel_tracking': wheel_metrics,
             'chassis_motion': chassis_metrics,
-            'root_cause': classify_root_cause(
-                wheel_metrics, chassis_metrics),
+            'root_cause': root_cause,
         }
         if filtered_poses is not None:
             result.update({
@@ -1352,10 +1409,22 @@ class OdometryTestRunner(Node):
             'profile_order': self.profile_order,
             'random_seed': self.random_seed,
             'actual_execution_order': actual_execution_order,
+            'roller_configuration': {
+                'joint_damping': self.roller_joint_damping,
+                'joint_friction': self.roller_joint_friction,
+                'contact_mu': self.roller_contact_mu,
+                'collision_model': self.roller_collision_model,
+                'phases': self.roller_phases,
+            },
+            'physics_configuration': {
+                'max_step_size': self.physics_max_step_size,
+            },
         }
         metadata = {
             'git_commit': self._repository_commit(),
             'diagnostic_baseline_commit': self._repository_revision('main'),
+            'calibration_baseline_commit': self._string(
+                'calibration_baseline_commit'),
             'evaluation_mode': self.evaluation_mode,
             'localization_enabled': self.localization_enabled,
             'ros_distribution': os.environ.get('ROS_DISTRO', 'unknown'),

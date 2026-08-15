@@ -68,7 +68,7 @@ def _validated_named_elements(root, tag, pattern):
     return elements
 
 
-def _validate_explicit_rollers(root):
+def _validate_explicit_rollers(root, collision_model):
     driven_joint_names = {name + '_wheel_joint' for name in WHEEL_NAMES}
     driven_joints = [
         joint.attrib.get('name') for joint in root.findall('.//joint')
@@ -132,15 +132,30 @@ def _validate_explicit_rollers(root):
     collision_count = 0
     for name, link in roller_links.items():
         collisions = link.findall('collision')
-        if len(collisions) != 1:
+        expected_collision_count = 9 if collision_model == 'barrel' else 1
+        if len(collisions) != expected_collision_count:
             raise RuntimeError(
-                f'Roller link {name} must have exactly one collision; '
+                f'Roller link {name} must have exactly '
+                f'{expected_collision_count} collisions; '
                 f'found {len(collisions)}'
             )
         collision_count += len(collisions)
-    if collision_count != 40:
+        expected_geometry = 'sphere' if collision_model == 'barrel' \
+            else 'cylinder'
+        for collision in collisions:
+            geometry = collision.find('geometry')
+            if geometry is None or len(geometry) != 1:
+                raise RuntimeError(
+                    f'Roller link {name} must have one geometry per collision')
+            if geometry[0].tag != expected_geometry:
+                raise RuntimeError(
+                    f'Roller link {name} expected {expected_geometry} '
+                    f'collision, found {geometry[0].tag}')
+    expected_total = 360 if collision_model == 'barrel' else 40
+    if collision_count != expected_total:
         raise RuntimeError(
-            f'Expected 40 roller collisions, found {collision_count}'
+            f'Expected {expected_total} roller collisions, '
+            f'found {collision_count}'
         )
 
     friction_directions = root.findall('.//fdir1')
@@ -157,6 +172,16 @@ def main():
     parser.add_argument('--xacro', required=True)
     parser.add_argument('--controllers', required=True)
     parser.add_argument('--output', required=True)
+    parser.add_argument('--roller-joint-damping', default='0.0')
+    parser.add_argument('--roller-joint-friction', default='0.0')
+    parser.add_argument('--roller-contact-mu', default='0.8')
+    parser.add_argument(
+        '--roller-collision-model', choices=('cylinder', 'barrel'),
+        default='barrel')
+    parser.add_argument('--front-left-roller-phase', default='0.22193969')
+    parser.add_argument('--front-right-roller-phase', default='0.48030419')
+    parser.add_argument('--rear-right-roller-phase', default='0.19668582')
+    parser.add_argument('--rear-left-roller-phase', default='0.24790784')
     args = parser.parse_args()
 
     urdf = subprocess.run(
@@ -165,6 +190,14 @@ def main():
             args.xacro,
             'use_gazebo:=true',
             'controllers_file:=' + args.controllers,
+            'roller_joint_damping:=' + args.roller_joint_damping,
+            'roller_joint_friction:=' + args.roller_joint_friction,
+            'roller_contact_mu:=' + args.roller_contact_mu,
+            'roller_collision_model:=' + args.roller_collision_model,
+            'front_left_roller_phase:=' + args.front_left_roller_phase,
+            'front_right_roller_phase:=' + args.front_right_roller_phase,
+            'rear_right_roller_phase:=' + args.rear_right_roller_phase,
+            'rear_left_roller_phase:=' + args.rear_left_roller_phase,
         ],
         check=True,
         capture_output=True,
@@ -211,7 +244,7 @@ def main():
                 uri.text.startswith(prefix) for prefix in WHEEL_URI_PREFIXES):
             raise RuntimeError('Unresolved wheel visual URI: ' + uri.text)
 
-    _validate_explicit_rollers(root)
+    _validate_explicit_rollers(root, args.roller_collision_model)
 
     ET.ElementTree(root).write(
         args.output,
