@@ -12,6 +12,7 @@ coverage.xml
 htmlcov/
 
 # Runtime output and retained local evidence
+/maps/
 /odometry_results/
 /phase1_results/
 /rosbags/

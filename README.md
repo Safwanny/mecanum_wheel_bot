@@ -9,11 +9,410 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 | `mobile_base_description` | Xacro model, SI-unit geometry, inertial data, and RViz configuration |
 | `mobile_base_gazebo` | Gazebo Harmonic world and simulator-specific assets |
 | `mobile_base_bringup` | ros2_control configuration and top-level launch files |
-| `mobile_base_localization` | Planar wheel-odometry and IMU EKF configuration |
+| `mobile_base_localization` | Planar EKF, SLAM Toolbox mapping, Nav2 map serving, and holonomic AMCL |
 | `mobile_base_evaluation` | Evaluation-only, identity-selected Gazebo ground truth |
 | `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
 
 The packages are independent of the existing arm stack.
+
+## Phase 1 status
+
+**Status: Phase 1 complete.** The mobile-base software baseline is established
+and ready for Phase 2. Phase 1 delivered the mecanum simulation and control
+stack, raw wheel odometry, fused wheel/IMU odometry, explicit TF ownership,
+timestamp and TF contract validation, repeatable motion evaluation, and an
+isolated per-repetition campaign lifecycle with bounded cleanup and resumable,
+non-overwriting results.
+
+The completed raw and fused campaigns support these engineering conclusions:
+
+- raw and fused odometry validation are complete across the motion profiles;
+- fusion substantially improves yaw accuracy and cross-axis drift;
+- endpoint position performance is broadly similar overall;
+- square-path closure improves with fusion;
+- startup outliers remain in the primary results rather than being removed or
+  replaced; and
+- no controller, EKF, geometry, trajectory, sensor-rate, or evaluation-threshold
+  tuning was required to close Phase 1.
+
+Phase 2 builds on this fixed baseline with SLAM Toolbox mapping and saved-map
+localization. Full Nav2 planning and autonomous navigation remain later work.
+
+## Phase 2: mapping and saved-map localization
+
+Phase 2 provides two deliberately separate operating modes. They are mutually
+exclusive: stop one mode before starting the other.
+
+```text
+Mapping Mode:
+  /scan + odom -> base_footprint -> slam_toolbox -> /map + map -> odom
+
+Localization Mode:
+  saved YAML/PGM -> map_server -> /map
+  /scan + odom -> base_footprint -> AMCL -> /amcl_pose + map -> odom
+```
+
+TF ownership is fixed in both modes:
+
+| Transform | Mapping Mode owner | Localization Mode owner |
+| --- | --- | --- |
+| `map -> odom` | `slam_toolbox` only | AMCL only |
+| `odom -> base_footprint` | Phase 1 `ekf_filter_node` | Phase 1 `ekf_filter_node` |
+| `base_footprint -> base_link -> sensors` | `robot_state_publisher` | `robot_state_publisher` |
+
+Never co-launch `mobile_base_bringup mapping.launch.py` and
+`mobile_base_bringup localization.launch.py`. Doing so would create competing
+`map -> odom` publishers. Neither mode changes the validated controller,
+mecanum kinematics, EKF tuning, URDF geometry, or local odometry topics.
+
+### Supported worlds and saved-map names
+
+The world passed to the launch file and the saved-map basename must describe
+the same environment. Keep every YAML beside its referenced image file.
+
+| Gazebo world | Intended use | Saved-map pair |
+| --- | --- | --- |
+| `navigation_basic` | Primary Phase 2 room and obstacle test | `maps/mobile_base/navigation_basic.{yaml,pgm}` |
+| `navigation_narrow` | Narrow corridors, turns, and close-wall scan matching | `maps/mobile_base/navigation_narrow.{yaml,pgm}` |
+| `empty` | Motion and controller smoke tests; too little structure for useful localization | No maintained Phase 2 map |
+| `sensor_test` | Camera, LiDAR, and IMU validation | No maintained Phase 2 map |
+
+Generated maps and pose graphs live under `$HOME/ros2_ws/maps/mobile_base/`.
+That runtime directory is ignored by Git. Saving a map with an existing
+basename replaces that local YAML/PGM pair.
+
+```text
+ros2_ws/maps/mobile_base/
+├── navigation_basic.yaml
+├── navigation_basic.pgm
+├── navigation_narrow.yaml      # after mapping navigation_narrow
+└── navigation_narrow.pgm       # after mapping navigation_narrow
+```
+
+### One-time setup
+
+Install dependencies and build from a clean shell:
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src/mobile_base --ignore-src -r -y
+colcon build --symlink-install --packages-up-to \
+  mobile_base_bringup mobile_base_localization mobile_base_tools
+source "$HOME/ros2_ws/install/setup.bash"
+```
+
+Open a fresh terminal after rebuilding. In every terminal below, source the
+Jazzy underlay first and this workspace overlay second. Do not use a setup file
+from another workspace.
+
+### End-to-end visual test: `navigation_basic`
+
+The following procedure starts with no running simulation, creates and saves a
+map, reloads it, initializes AMCL, and visually verifies localization. Keep the
+terminal numbering: commands in different terminals run concurrently.
+
+Before Terminal 1, stop any previous mapping, localization, teleop, Gazebo, or
+RViz launch with `Ctrl-C` in the terminal that owns it. Wait for its windows to
+close. The following read-only check should produce no old Phase 2 processes:
+
+```bash
+pgrep -af 'mapping.launch.py|localization.launch.py|gz sim|slam_toolbox|amcl'
+```
+
+#### 1. Start Mapping Mode (Terminal 1)
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+ros2 launch mobile_base_bringup mapping.launch.py \
+  world:=navigation_basic \
+  rviz:=true \
+  gui:=true \
+  render_engine:=ogre2
+```
+
+Leave Terminal 1 running. Exactly one Gazebo window and the blue Mapping Mode
+RViz window should open. RViz uses fixed frame `map` and should show the robot,
+TF, LaserScan, filtered odometry/trajectory, and a live occupancy map. The map
+may be small until the robot moves.
+
+#### 2. Drive while mapping (Terminal 2)
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -p stamped:=true \
+  -p frame_id:=base_link \
+  -p speed:=0.3 \
+  -p turn:=0.5 \
+  -p use_sim_time:=true \
+  -r cmd_vel:=/mobile_base_controller/reference
+```
+
+Keep Terminal 2 focused. `i` and `,` drive forward and backward; `j` and `l`
+rotate; uppercase `J` and `L` strafe; uppercase `U`, `O`, `M`, and `>` drive
+diagonally. Press `k`, Space, or any unmapped key to stop. Avoid `q`, `z`, `w`,
+`x`, `e`, and `c` unless deliberately changing the velocity limits.
+
+Drive slowly around every obstacle, rotate to observe all wall directions, and
+return to a previously mapped area so SLAM Toolbox can close loops. A useful
+visual result has crisp single walls rather than duplicated or smeared walls,
+scan points on obstacle boundaries, and no large unexplored holes in reachable
+areas. Keyboard teleoperation provides no collision avoidance.
+
+Optional live checks from a third terminal are:
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+ros2 lifecycle get /slam_toolbox
+ros2 topic hz /scan
+ros2 topic hz /odometry/filtered
+ros2 topic hz /map
+ros2 run tf2_ros tf2_echo map base_footprint
+```
+
+`/slam_toolbox` must be `active [3]`; `/amcl` must not exist in Mapping Mode.
+
+#### 3. Stop the robot and save the map (Terminal 3)
+
+Press `k` in Terminal 2, but keep both Mapping Mode and Gazebo running. Then run:
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+mkdir -p "$HOME/ros2_ws/maps/mobile_base"
+
+ros2 run nav2_map_server map_saver_cli \
+  -t /map \
+  -f "$HOME/ros2_ws/maps/mobile_base/navigation_basic" \
+  --ros-args \
+  -p map_subscribe_transient_local:=true \
+  -p save_map_timeout:=10.0
+```
+
+Do not stop Terminal 1 before this command prints `Map saved successfully`.
+Warnings that unspecified occupied/free thresholds use defaults are normal.
+Verify both files before leaving Mapping Mode:
+
+```bash
+ls -lh "$HOME/ros2_ws/maps/mobile_base/navigation_basic.yaml" \
+  "$HOME/ros2_ws/maps/mobile_base/navigation_basic.pgm"
+sed -n '1,20p' \
+  "$HOME/ros2_ws/maps/mobile_base/navigation_basic.yaml"
+```
+
+The YAML `image:` entry should name `navigation_basic.pgm`. Optionally preserve
+the SLAM pose graph for continued mapping:
+
+```bash
+ros2 service call /slam_toolbox/serialize_map \
+  slam_toolbox/srv/SerializePoseGraph \
+  "{filename: '${HOME}/ros2_ws/maps/mobile_base/navigation_basic.posegraph'}"
+```
+
+#### 4. Stop Mapping Mode
+
+After the YAML and PGM exist, press `Ctrl-C` in Terminal 2 and then Terminal 1.
+Wait for Gazebo and RViz to close. Do not start Localization Mode while
+`/slam_toolbox` or an old Gazebo server is still running.
+
+#### 5. Reload the map in Localization Mode (Terminal 4)
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+ros2 launch mobile_base_bringup localization.launch.py \
+  world:=navigation_basic \
+  map:="$HOME/ros2_ws/maps/mobile_base/navigation_basic.yaml" \
+  rviz:=true \
+  gui:=true \
+  render_engine:=ogre2
+```
+
+Leave Terminal 4 running. Gazebo and the green Localization Mode RViz window
+should open with the saved map already visible. Until AMCL receives an initial
+pose, RViz may report missing `map -> odom`, drop `odom` or `lidar_link`
+messages, and print `Please set the initial pose`; this is the expected waiting
+state.
+
+#### 6. Initialize AMCL in RViz
+
+In RViz, select **2D Pose Estimate** from the toolbar or Tools panel. Click the
+robot's approximate position on the saved map, drag the arrow in its forward
+direction, and release. The simulation respawns at the original world pose, so
+the original mapping start position is the best first estimate.
+
+Within a few seconds, the robot model and scan should appear in the map frame,
+the scan should align with saved walls, the AMCL particles should contract
+around the robot, and the initial-pose warnings should stop. If the scan is
+offset or rotated, set the initial pose again more accurately.
+
+#### 7. Drive while localizing (Terminal 5)
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -p stamped:=true \
+  -p frame_id:=base_link \
+  -p speed:=0.3 \
+  -p turn:=0.5 \
+  -p use_sim_time:=true \
+  -r cmd_vel:=/mobile_base_controller/reference
+```
+
+Exercise forward/reverse motion, rotation, both strafes, and diagonals. A
+successful visual test keeps the robot and scan aligned with the saved map,
+keeps the particle cloud centered near the robot, and reduces covariance after
+motion provides useful scan observations.
+
+#### 8. Verify AMCL from the CLI (Terminal 6)
+
+```bash
+cd "$HOME/ros2_ws"
+source /opt/ros/jazzy/setup.bash
+source "$HOME/ros2_ws/install/setup.bash"
+
+ros2 lifecycle get /map_server
+ros2 lifecycle get /amcl
+ros2 topic echo /amcl_pose --once
+ros2 topic echo /particle_cloud --once
+ros2 run tf2_ros tf2_echo map base_footprint
+```
+
+Both lifecycle nodes must report `active [3]`. `/amcl`, `/map_server`,
+`/amcl_pose`, and `/particle_cloud` must exist; `/slam_toolbox` must not exist.
+
+#### 9. Stop Localization Mode
+
+Press `k` and then `Ctrl-C` in Terminal 5. Press `Ctrl-C` in Terminal 4 and wait
+for Gazebo and RViz to close.
+
+### Repeat the complete test for `navigation_narrow`
+
+Use the same terminal order and teleop command. Change only the world and map
+basename in the mapping, save, and localization commands:
+
+```bash
+# Mapping Mode
+ros2 launch mobile_base_bringup mapping.launch.py \
+  world:=navigation_narrow \
+  rviz:=true gui:=true render_engine:=ogre2
+
+# Save while Mapping Mode is still running
+ros2 run nav2_map_server map_saver_cli \
+  -t /map \
+  -f "$HOME/ros2_ws/maps/mobile_base/navigation_narrow" \
+  --ros-args \
+  -p map_subscribe_transient_local:=true \
+  -p save_map_timeout:=10.0
+
+# After stopping Mapping Mode, start Localization Mode
+ros2 launch mobile_base_bringup localization.launch.py \
+  world:=navigation_narrow \
+  map:="$HOME/ros2_ws/maps/mobile_base/navigation_narrow.yaml" \
+  rviz:=true gui:=true render_engine:=ogre2
+```
+
+The narrow-world visual test should pay particular attention to parallel wall
+alignment, duplicated corridor edges, scan matching during turns, lateral
+motion near walls, and particle convergence after emerging from a corridor.
+
+### Hardware-only mapping and localization
+
+For an already-running hardware/base stack that supplies `/scan`,
+`/odometry/filtered`, and the local TF chain, launch only the sensor-agnostic
+mapping subsystem with wall time:
+
+```bash
+ros2 launch mobile_base_localization mapping.launch.py \
+  use_sim_time:=false
+```
+
+After saving a hardware map, stop mapping and launch only map serving and AMCL:
+
+```bash
+ros2 launch mobile_base_localization amcl.launch.py \
+  use_sim_time:=false \
+  map:=/absolute/path/to/the_saved_map.yaml
+```
+
+Hardware commissioning requires measured sensor ranges, TF timing, motion
+noise, and safe velocity limits; the simulation defaults are not hardware
+acceptance criteria.
+
+### Phase 2 visual troubleshooting
+
+| Symptom | Cause and action |
+| --- | --- |
+| World resolves under `$HOME/install` instead of `$HOME/ros2_ws/install` | The shell contains a stale overlay. Open a fresh terminal and source `/opt/ros/jazzy/setup.bash`, then `$HOME/ros2_ws/install/setup.bash`. |
+| Two Gazebo or RViz windows appear | More than one launch is alive or the workspace was not rebuilt after a launch-file change. Stop every old launch, rebuild, source the overlay, and start one mode once. |
+| `Detected jump back in time` repeats | Multiple Gazebo servers are publishing the same Gazebo world clock. Stop all old simulator sessions before restarting. |
+| Gazebo is visible but the robot does not move | Mapping and localization do not drive automatically. Run stamped keyboard teleop and keep its terminal focused. |
+| Map is smeared or walls are duplicated | Motion was too fast, scan matching was poor, or multiple clocks existed. Remap at about `0.3 m/s`, rotate slowly, and revisit known areas. |
+| `map_saver_cli` reports `Failed to spin map subscription` | Mapping Mode was stopped too early or `/map` is unavailable. Keep Terminal 1 running, confirm `ros2 topic echo /map --once`, and retry the documented durable save command. |
+| Localization says `Please set the initial pose` | This is expected before initialization. Use RViz **2D Pose Estimate** and align the arrow with the robot heading. |
+| Scan and map do not align after initialization | The initial position or yaw is wrong, or the wrong map/world pair was loaded. Set the pose again and verify matching basenames. |
+| Robot collides with obstacles | Phase 2 has no planner, collision avoidance, velocity smoother, or command mux. The teleoperator must stop and steer safely. |
+
+### Phase 2 validation coverage
+
+Mapping validation covers live map updates, all holonomic directions, loop
+closure, YAML/PGM saving, and map reload. Localization validation covers map
+reload, RViz initial-pose setting, particle convergence, deliberately offset
+pose recovery, holonomic motion, covariance behavior, and restart/reload.
+
+### Quantitative localization evaluation
+
+Gazebo ground truth remains evaluation-only. For a quantitative localization
+run, start the existing identity-based selector for the chosen world and record
+it beside AMCL and TF:
+
+```bash
+ros2 run mobile_base_evaluation ground_truth_selector --ros-args \
+  -p world:=navigation_basic \
+  -p gz_topic:=/world/navigation_basic/dynamic_pose/info \
+  -p robot_entity:=mobile_base \
+  -p output_topic:=/mobile_base/evaluation/ground_truth
+ros2 bag record /mobile_base/evaluation/ground_truth /amcl_pose /tf /tf_static
+```
+
+Only compare poses after aligning the saved map and Gazebo world origins.
+Measure planar position error, yaw error, RMSE, maximum position error, and
+convergence time from the recording; no acceptance thresholds are asserted
+until measurements establish a baseline.
+
+### Phase 2 tuning and limitations
+
+Defaults match the repository's 10 Hz, 0.10-4.0 m simulated LaserScan, 50 Hz
+filtered odometry, `base_footprint` frame, small robot dimensions, and
+conservative 0.05 m map resolution. Hardware commissioning must remeasure and
+tune laser min/max range, scan and TF timing, SLAM travel/update and loop
+closure thresholds, AMCL `alpha1`-`alpha5` (especially lateral `alpha5`),
+particle counts, update thresholds, and transform tolerance.
+
+Generated maps and pose graphs are runtime artifacts and are not committed.
+Continued mapping from a serialized graph is optional and not automatically
+launched. The simulated GPU LiDAR requires the wrappers' default Ogre2 sensor
+renderer; an Ogre1 validation run pinned all 720 beams to the 0.10 m minimum
+and cannot produce a usable map. Phase 2 does not add planners, controller
+servers, behavior trees, goal execution, obstacle avoidance, command
+arbitration, velocity smoothing, or any other autonomous-navigation component.
 
 ## Units and CAD source
 
@@ -299,10 +698,8 @@ LIBGL_ALWAYS_SOFTWARE=1 ros2 launch mobile_base_bringup simulation.launch.py \
   gui:=false rviz:=false render_engine:=ogre
 ```
 
-This avoids the known Ogre2 hardware-EGL path but does not suppress kernel
-AMDGPU diagnostics. Stop validation if the documented repeated AMDGPU warning
-returns. If TF is absent, ensure only this launch owns `robot_state_publisher`
-and that `/joint_states` is active. To inspect bridge types and QoS:
+If TF is absent, ensure only this launch owns `robot_state_publisher` and that
+`/joint_states` is active. To inspect bridge types and QoS:
 
 ```bash
 ros2 topic info -v /scan
@@ -444,8 +841,8 @@ ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
   output_dir:=phase1_results/raw_baseline
 ```
 
-For the formal fresh-process campaign (55 raw-only plus 55 fused runs), use a
-new empty output directory:
+For the formal raw and fused fresh-process campaign, use a new empty output
+directory:
 
 ```bash
 ros2 run mobile_base_tools evaluation_campaign \
@@ -453,10 +850,14 @@ ros2 run mobile_base_tools evaluation_campaign \
   --output-dir phase1_results/formal_campaign
 ```
 
-The campaign manifest is updated atomically after every profile launch. An
-interrupted campaign is marked `interrupted`; `--resume` skips completed cases
-while retaining every prior attempt and launch log. Without `--resume`, the
-tool refuses to write into a non-empty directory.
+Every campaign repetition launches in its own process session. The lifecycle
+tracks descendants, applies bounded `SIGINT -> SIGTERM -> SIGKILL` cleanup,
+reaps children, requires zero remaining campaign processes, and waits for the
+ROS graph to settle before another repetition starts. The campaign manifest is
+updated atomically after every profile launch. An interrupted campaign is
+marked `interrupted`; `--resume` skips completed cases while retaining every
+prior attempt and launch log. Without `--resume`, the tool refuses to write
+into a non-empty directory.
 
 Use an explicit writable output directory for retained evidence; the fallback
 is `/tmp/mobile_base_phase1`, never a hardcoded workspace source path. The
@@ -470,13 +871,15 @@ five-repetition YAML value.
 
 Complete evaluation output is generated inside the ignored
 `phase1_results/` directory. Campaign manifests, summaries, trajectories,
-plots, process/resource telemetry, and host diagnostics remain local evidence
-and are intentionally excluded from source commits. Copy or back up that
-directory separately when evidence must be retained across machines.
+and plots remain local evidence and are intentionally excluded from source
+commits. Copy or back up that directory separately when evidence must be
+retained across machines.
 
-Formal Phase 1 runtime validation remains pending on a stable host. Reboot into
-a clean host state, pass the representative lifecycle stress test, and only
-then resume a retained campaign through `--resume`.
+Formal Phase 1 runtime validation is complete: all raw and fused profile runs
+were collected with the isolated lifecycle, and the retained interrupted
+attempt and startup outliers remain part of the evidence. The generated
+campaign data stays local under `phase1_results/`; the conclusions relevant to
+the maintained software baseline are summarized in "Phase 1 status" above.
 
 Each repetition publishes zero velocity, verifies measured velocity is below
 threshold, resets the named Gazebo model through `/world/empty/set_pose`,
@@ -549,9 +952,9 @@ Troubleshooting:
 The EKF does not correct the physical trajectory or eliminate wheel slip. IMU
 yaw rate principally improves angular-state observability and orientation
 consistency; planar position may still drift because no absolute XY position
-sensor is fused. Phase 1 provides no autonomous navigation. The next phase is
-SLAM Toolbox mapping, saved-map localization, and Nav2 point-to-point
-navigation.
+sensor is fused. Phase 1 provides no autonomous navigation. Phase 2 adds only
+SLAM Toolbox mapping and saved-map localization; autonomous navigation remains
+out of scope.
 
 ## Teleoperation
 
@@ -699,6 +1102,6 @@ anisotropic contact parameters for the selected Gazebo physics engine.
 
 `.github/workflows/ci.yaml` builds all six packages on ROS 2 Jazzy and runs the
 deterministic unit, lint, Xacro/URDF, configuration, Python compilation, and
-whitespace checks. Gazebo launch tests and the 110-run formal campaign stay out
-of normal pull-request CI; they remain explicit runtime validation on a stable
+whitespace checks. Gazebo launch tests and the formal campaign stay out of
+normal pull-request CI; they remain explicit runtime validation on a stable
 host.

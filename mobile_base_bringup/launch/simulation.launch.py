@@ -29,6 +29,7 @@ from launch.actions import (
     OpaqueFunction,
     RegisterEventHandler,
     SetEnvironmentVariable,
+    SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
@@ -366,7 +367,7 @@ def generate_launch_description():
         executable='rviz2',
         arguments=['-d', rviz_config],
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
-        condition=IfCondition(LaunchConfiguration('rviz')),
+        condition=IfCondition(LaunchConfiguration('simulation_rviz')),
         output='screen',
     )
 
@@ -419,6 +420,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument('gui', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
+            # Controller spawners start RViz from a delayed process-exit
+            # handler. Capture this include's value now so a later include
+            # cannot overwrite it through the shared launch context.
+            SetLaunchConfiguration(
+                'simulation_rviz', LaunchConfiguration('rviz')
+            ),
             DeclareLaunchArgument(
                 'render_engine',
                 default_value='ogre2',

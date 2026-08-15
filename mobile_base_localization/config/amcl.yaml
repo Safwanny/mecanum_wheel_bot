@@ -1,0 +1,51 @@
+amcl:
+  ros__parameters:
+    # Frame ownership: AMCL adds map -> odom; Phase 1 keeps the local chain.
+    global_frame_id: map
+    odom_frame_id: odom
+    base_frame_id: base_footprint
+    scan_topic: /scan
+    tf_broadcast: true
+    transform_tolerance: 0.30
+
+    # Mecanum motion is holonomic. The omni model includes lateral odometry.
+    robot_model_type: nav2_amcl::OmniMotionModel
+    alpha1: 0.20
+    alpha2: 0.20
+    alpha3: 0.20
+    alpha4: 0.20
+    alpha5: 0.20
+
+    # Match the simulated 10 Hz, 0.10-4.0 m planar LiDAR.
+    laser_model_type: likelihood_field
+    laser_likelihood_max_dist: 2.0
+    laser_min_range: -1.0
+    laser_max_range: 4.0
+    max_beams: 120
+    sigma_hit: 0.20
+    lambda_short: 0.10
+    z_hit: 0.50
+    z_short: 0.05
+    z_max: 0.05
+    z_rand: 0.50
+    do_beamskip: false
+    beam_skip_distance: 0.5
+    beam_skip_threshold: 0.3
+    beam_skip_error_threshold: 0.9
+
+    # Conservative particle and update bounds for the existing small base.
+    min_particles: 500
+    max_particles: 2000
+    pf_err: 0.05
+    pf_z: 0.99
+    resample_interval: 1
+    update_min_d: 0.05
+    update_min_a: 0.10
+    recovery_alpha_slow: 0.0
+    recovery_alpha_fast: 0.0
+    save_pose_rate: 0.5
+
+    # RViz /initialpose is the normal initial-pose interface.
+    set_initial_pose: false
+    always_reset_initial_pose: false
+    first_map_only: false

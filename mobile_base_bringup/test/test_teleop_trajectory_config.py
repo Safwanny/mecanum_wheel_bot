@@ -36,6 +36,8 @@ def main():
 
     launch = read(bringup / 'launch' / 'simulation.launch.py')
     assert 'mobile_base_sim.rviz' in launch
+    assert "'simulation_rviz', LaunchConfiguration('rviz')" in launch
+    assert "IfCondition(LaunchConfiguration('simulation_rviz'))" in launch
     assert 'mobile_base_controller/tf_odometry:=/tf' in launch
     assert repr(('tf', '/tf')) in launch
     assert repr(('tf_static', '/tf_static')) in launch

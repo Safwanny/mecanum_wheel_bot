@@ -1,0 +1,121 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Mapping Displays
+  - Class: rviz_common/Tool Properties
+    Name: Mapping Tools
+  - Class: slam_toolbox::SlamToolboxPlugin
+    Name: Mapping / Loop Closure
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Cell Size: 0.5
+      Name: Mapping Grid
+      Plane Cell Count: 40
+      Value: true
+    - Alpha: 1
+      Binary representation: false
+      Binary threshold: 100
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: true
+      Name: LIVE MAP - MAPPING MODE
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map_updates
+      Use Timestamp: false
+      Value: true
+    - Class: rviz_default_plugins/RobotModel
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+      Name: Robot Model
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: TF - slam_toolbox owns map to odom
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/LaserScan
+      Color: 255; 90; 30
+      Color Transformer: FlatColor
+      Decay Time: 0.5
+      Enabled: true
+      Name: Live LaserScan
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /scan
+      Use Fixed Frame: true
+      Value: true
+    - Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: true
+      Keep: 1
+      Name: Filtered Local Odometry
+      Shape: Axes
+      Topic:
+        Value: /odometry/filtered
+      Value: true
+    - Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 220; 255
+      Enabled: true
+      Line Style: Lines
+      Line Width: 0.03
+      Name: Mapping Trajectory
+      Pose Style: None
+      Topic:
+        Value: /mobile_base/filtered_trajectory
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 25; 35; 58
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: MAPPING MODE
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 255; 190; 0
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Mapping Top Down
+      Scale: 80
+      Target Frame: <Fixed Frame>
+      Value: TopDownOrtho (rviz)
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1400
