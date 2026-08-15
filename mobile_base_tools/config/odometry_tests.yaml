@@ -89,6 +89,96 @@ profiles:
     settle_after: 1.0
     repetitions: 5
 
+  diagnostic_low_forward:
+    kind: longitudinal
+    command: {linear_x: 0.04, linear_y: 0.00, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_backward:
+    kind: longitudinal
+    command: {linear_x: -0.04, linear_y: 0.00, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_left:
+    kind: lateral
+    command: {linear_x: 0.00, linear_y: 0.04, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_right:
+    kind: lateral
+    command: {linear_x: 0.00, linear_y: -0.04, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_rotate_positive:
+    kind: rotation
+    command: {linear_x: 0.00, linear_y: 0.00, angular_z: 0.15}
+    termination: {type: ground_truth_rotation, target: 0.50}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_rotate_negative:
+    kind: rotation
+    command: {linear_x: 0.00, linear_y: 0.00, angular_z: -0.15}
+    termination: {type: ground_truth_rotation, target: 0.50}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_forward_left:
+    kind: diagonal
+    command: {linear_x: 0.03, linear_y: 0.03, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_forward_right:
+    kind: diagonal
+    command: {linear_x: 0.03, linear_y: -0.03, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_backward_left:
+    kind: diagonal
+    command: {linear_x: -0.03, linear_y: 0.03, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
+  diagnostic_low_backward_right:
+    kind: diagonal
+    command: {linear_x: -0.03, linear_y: -0.03, angular_z: 0.00}
+    termination: {type: ground_truth_translation, target: 0.25}
+    profile_timeout: 12.0
+    settle_before: 1.0
+    settle_after: 1.0
+    repetitions: 1
+
   square_1m:
     kind: square
     profile_timeout: 90.0

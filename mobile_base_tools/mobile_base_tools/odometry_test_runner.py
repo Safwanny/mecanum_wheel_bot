@@ -9,8 +9,15 @@ import subprocess
 import time
 
 from ament_index_python.packages import get_package_share_directory
+from control_msgs.msg import MecanumDriveControllerState
 from controller_manager_msgs.srv import ListControllers
 from geometry_msgs.msg import PoseStamped, TwistStamped
+from mobile_base_tools.mecanum_diagnostics import (
+    chassis_motion_metrics,
+    classify_root_cause,
+    expected_wheel_velocities,
+    wheel_tracking_metrics,
+)
 from mobile_base_tools.motion_profiles import load_profiles
 from mobile_base_tools.odometry_evaluator import (
     calculate_run_metrics,
@@ -46,6 +53,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SetEntityPose
+from sensor_msgs.msg import Imu, JointState
 
 
 class EvaluationError(RuntimeError):
@@ -103,6 +111,12 @@ class OdometryTestRunner(Node):
             'command_topic': '/mobile_base_controller/reference',
             'odometry_topic': '/mobile_base_controller/odometry',
             'filtered_odometry_topic': '/odometry/filtered',
+            'controller_state_topic': (
+                '/mobile_base_controller/controller_state'),
+            'joint_states_topic': '/joint_states',
+            'imu_topic': '/imu/data',
+            'wheels_radius': 0.03074443,
+            'center_projection_sum': 0.142,
             'command_frame': 'base_link',
         }
         for name, value in defaults.items():
@@ -155,6 +169,9 @@ class OdometryTestRunner(Node):
             raise ValueError(
                 'profile_order must be configured or randomized')
         self.random_seed = int(self.get_parameter('random_seed').value)
+        self.wheels_radius = self._positive('wheels_radius')
+        self.center_projection_sum = self._positive(
+            'center_projection_sum')
         self.world = self._string('world')
         self.robot_entity = self._string('robot_entity')
         self.command_frame = self._string('command_frame')
@@ -191,11 +208,20 @@ class OdometryTestRunner(Node):
         self.latest_odometry_message = None
         self.latest_odometry_wall = 0.0
         self.latest_filtered = None
+        self.latest_filtered_message = None
         self.latest_filtered_wall = 0.0
+        self.latest_controller_state = None
+        self.latest_controller_state_wall = 0.0
+        self.latest_joint_state = None
+        self.latest_joint_state_wall = 0.0
+        self.latest_imu = None
+        self.latest_imu_wall = 0.0
         self._last_sample_stamp = None
         self._previous_ground_truth = None
         self._previous_odometry = None
         self.ground_truth_speed = 0.0
+        self.ground_truth_velocity = {
+            'linear_x': 0.0, 'linear_y': 0.0, 'angular_z': 0.0}
         self.raw_odometry_speed = 0.0
         self.command_diagnostics = self._new_command_diagnostics()
         self.last_command = None
@@ -223,6 +249,24 @@ class OdometryTestRunner(Node):
             self._string('filtered_odometry_topic'),
             self._filtered_callback,
             10,
+        )
+        self.controller_state_subscription = self.create_subscription(
+            MecanumDriveControllerState,
+            self._string('controller_state_topic'),
+            self._controller_state_callback,
+            10,
+        )
+        self.joint_state_subscription = self.create_subscription(
+            JointState,
+            self._string('joint_states_topic'),
+            self._joint_state_callback,
+            qos_profile_sensor_data,
+        )
+        self.imu_subscription = self.create_subscription(
+            Imu,
+            self._string('imu_topic'),
+            self._imu_callback,
+            qos_profile_sensor_data,
         )
         self.set_pose_client = self.create_client(
             SetEntityPose, self._string('set_pose_service')
@@ -292,9 +336,13 @@ class OdometryTestRunner(Node):
         previous = self.latest_ground_truth
         if previous is not None and pose.stamp > previous.stamp:
             delta = relative_pose(previous, pose)
-            self.ground_truth_speed = (
-                math.hypot(delta.x, delta.y) / (pose.stamp - previous.stamp)
-            )
+            duration = pose.stamp - previous.stamp
+            self.ground_truth_speed = math.hypot(delta.x, delta.y) / duration
+            self.ground_truth_velocity = {
+                'linear_x': delta.x / duration,
+                'linear_y': delta.y / duration,
+                'angular_z': delta.yaw / duration,
+            }
         self._previous_ground_truth = previous
         self.latest_ground_truth = pose
         self.latest_ground_truth_wall = time.monotonic()
@@ -318,7 +366,24 @@ class OdometryTestRunner(Node):
                 'Nonmonotonic filtered odometry timestamp')
             return
         self.latest_filtered = pose
+        self.latest_filtered_message = message
         self.latest_filtered_wall = time.monotonic()
+
+    def _controller_state_callback(self, message):
+        self.latest_controller_state = message
+        self.latest_controller_state_wall = time.monotonic()
+
+    def _joint_state_callback(self, message):
+        required = {
+            'front_left_wheel_joint', 'front_right_wheel_joint',
+            'rear_right_wheel_joint', 'rear_left_wheel_joint'}
+        if required <= set(message.name):
+            self.latest_joint_state = message
+            self.latest_joint_state_wall = time.monotonic()
+
+    def _imu_callback(self, message):
+        self.latest_imu = message
+        self.latest_imu_wall = time.monotonic()
 
     def _odometry_callback(self, message):
         stamp = message.header.stamp
@@ -393,6 +458,10 @@ class OdometryTestRunner(Node):
         self.latest_odometry = None
         self.latest_odometry_message = None
         self.latest_filtered = None
+        self.latest_filtered_message = None
+        self.latest_controller_state = None
+        self.latest_joint_state = None
+        self.latest_imu = None
         self._spin_until(
             lambda: (
                 self.latest_ground_truth is not None
@@ -405,6 +474,9 @@ class OdometryTestRunner(Node):
                     self.evaluation_mode == 'raw_only'
                     or self.latest_filtered is not None
                 )
+                and self.latest_controller_state is not None
+                and self.latest_joint_state is not None
+                and self.latest_imu is not None
                 and self.set_pose_client.service_is_ready()
                 and self.command_publisher.get_subscription_count() > 0
             ),
@@ -622,6 +694,31 @@ class OdometryTestRunner(Node):
             if max(stamps) - min(stamps) > self.max_source_skew:
                 raise EvaluationError(
                     'ground-truth/raw/filtered timestamp skew exceeded limit')
+        for name, message, received in (
+            ('controller state', self.latest_controller_state,
+             self.latest_controller_state_wall),
+            ('joint state', self.latest_joint_state,
+             self.latest_joint_state_wall),
+            ('IMU', self.latest_imu, self.latest_imu_wall),
+        ):
+            if message is None or data_is_stale(
+                    received, now, self.data_timeout):
+                raise EvaluationError(f'{name} is missing or stale')
+
+    @staticmethod
+    def _joint_value(message, joint, field):
+        index = message.name.index(joint)
+        values = getattr(message, field)
+        return values[index] if index < len(values) else None
+
+    def _commanded_motion_rate(self, command):
+        """Return the measured rate relevant to the commanded motion type."""
+        if math.hypot(command.linear_x, command.linear_y) > 1.0e-9:
+            return max(self.ground_truth_speed, self.raw_odometry_speed)
+        return max(
+            abs(self.ground_truth_velocity['angular_z']),
+            abs(self.latest_odometry_message.twist.twist.angular.z),
+        )
 
     def _sample(
             self, command, wall_elapsed=0.0, simulation_elapsed=0.0):
@@ -638,7 +735,19 @@ class OdometryTestRunner(Node):
         ):
             raise EvaluationError('nonmonotonic sampled trajectory timestamp')
         self._last_sample_stamp = stamp
-        return {
+        expected = expected_wheel_velocities(
+            command.linear_x, command.linear_y, command.angular_z,
+            self.wheels_radius, self.center_projection_sum)
+        controller = self.latest_controller_state
+        joint_state = self.latest_joint_state
+        reference = controller.reference_velocity
+        wheel_joints = {
+            'front_left': 'front_left_wheel_joint',
+            'front_right': 'front_right_wheel_joint',
+            'rear_right': 'rear_right_wheel_joint',
+            'rear_left': 'rear_left_wheel_joint',
+        }
+        sample = {
             'timestamp': stamp,
             'commanded_linear_x': command.linear_x,
             'commanded_linear_y': command.linear_y,
@@ -670,8 +779,46 @@ class OdometryTestRunner(Node):
                 if wall_elapsed > 0.0 else 0.0
             ),
             'ground_truth_speed': self.ground_truth_speed,
+            'ground_truth_linear_x': self.ground_truth_velocity['linear_x'],
+            'ground_truth_linear_y': self.ground_truth_velocity['linear_y'],
+            'ground_truth_angular_z': (
+                self.ground_truth_velocity['angular_z']),
             'raw_odometry_speed': self.raw_odometry_speed,
+            'raw_odometry_linear_x': (
+                self.latest_odometry_message.twist.twist.linear.x),
+            'raw_odometry_linear_y': (
+                self.latest_odometry_message.twist.twist.linear.y),
+            'raw_odometry_angular_z': (
+                self.latest_odometry_message.twist.twist.angular.z),
+            'filtered_odometry_linear_x': (
+                self.latest_filtered_message.twist.twist.linear.x
+                if self.latest_filtered_message is not None else ''),
+            'filtered_odometry_linear_y': (
+                self.latest_filtered_message.twist.twist.linear.y
+                if self.latest_filtered_message is not None else ''),
+            'filtered_odometry_angular_z': (
+                self.latest_filtered_message.twist.twist.angular.z
+                if self.latest_filtered_message is not None else ''),
+            'imu_angular_velocity_z': self.latest_imu.angular_velocity.z,
+            'controller_reference_linear_x': reference.linear.x,
+            'controller_reference_linear_y': reference.linear.y,
+            'controller_reference_angular_z': reference.angular.z,
         }
+        controller_velocities = {
+            'front_left': controller.front_left_wheel_velocity,
+            'front_right': controller.front_right_wheel_velocity,
+            'rear_right': controller.back_right_wheel_velocity,
+            'rear_left': controller.back_left_wheel_velocity,
+        }
+        for wheel, joint in wheel_joints.items():
+            sample[f'expected_{wheel}_wheel_velocity'] = expected[wheel]
+            sample[f'actual_{wheel}_wheel_velocity'] = self._joint_value(
+                joint_state, joint, 'velocity')
+            sample[f'{wheel}_wheel_position'] = self._joint_value(
+                joint_state, joint, 'position')
+            sample[f'controller_{wheel}_wheel_velocity'] = (
+                controller_velocities[wheel])
+        return sample
 
     def _execute_segment(
             self, segment, samples, profile_sim_started, profile_wall_started,
@@ -737,7 +884,7 @@ class OdometryTestRunner(Node):
             if published:
                 samples.append(self._sample(
                     segment.command, wall_elapsed, simulation_elapsed))
-            speed = max(self.ground_truth_speed, self.raw_odometry_speed)
+            speed = self._commanded_motion_rate(segment.command)
             if (
                 not motion_started
                 and speed >= self.motion_start_speed_threshold
@@ -949,6 +1096,19 @@ class OdometryTestRunner(Node):
                 'simulation time with independent wall watchdog'),
             'command_diagnostics': dict(self.command_diagnostics),
         })
+        wheel_metrics = wheel_tracking_metrics(samples)
+        chassis_metrics = chassis_motion_metrics(samples, profile.kind)
+        result['mecanum_diagnostics'] = {
+            'measurement_only': True,
+            'kinematics': {
+                'wheels_radius': self.wheels_radius,
+                'center_projection_sum': self.center_projection_sum,
+            },
+            'wheel_tracking': wheel_metrics,
+            'chassis_motion': chassis_metrics,
+            'root_cause': classify_root_cause(
+                wheel_metrics, chassis_metrics),
+        }
         if filtered_poses is not None:
             result.update({
                 'filtered_odometry_initial': initial_filtered.to_dict(),
@@ -1090,14 +1250,17 @@ class OdometryTestRunner(Node):
         except (OSError, subprocess.SubprocessError, IndexError):
             return 'unavailable'
 
-    def _repository_commit(self):
-        """Return the commit owning the repository-local output directory."""
+    def _repository_revision(self, revision='HEAD'):
+        """Resolve a revision in the repository owning the output directory."""
         output = self.output_dir.resolve()
         for directory in (output, *output.parents):
             if (directory / '.git').exists():
                 return self._version(
-                    ['git', '-C', str(directory), 'rev-parse', 'HEAD'])
+                    ['git', '-C', str(directory), 'rev-parse', revision])
         return 'unavailable'
+
+    def _repository_commit(self):
+        return self._repository_revision('HEAD')
 
     def run_suite(self):
         """Run selected profiles, preserving failures in the final report."""
@@ -1192,6 +1355,7 @@ class OdometryTestRunner(Node):
         }
         metadata = {
             'git_commit': self._repository_commit(),
+            'diagnostic_baseline_commit': self._repository_revision('main'),
             'evaluation_mode': self.evaluation_mode,
             'localization_enabled': self.localization_enabled,
             'ros_distribution': os.environ.get('ROS_DISTRO', 'unknown'),

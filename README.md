@@ -925,6 +925,63 @@ The report labels filtered position performance as better, similar, or worse.
 Gazebo model pose is evaluation-only. Never use it as robot odometry or as
 input to localization, sensor fusion, SLAM, navigation, or TF publication.
 
+## Measurement-only mecanum motion diagnostics
+
+The odometry evaluator also records the complete drivetrain chain without
+changing any physical or controller parameter. The preserved Phase 2 baseline
+for this campaign is commit
+`e514a54de05430699203a05f46d845adb576021f`.
+
+Each trajectory CSV records the requested body twist, the body reference
+accepted by `mecanum_drive_controller`, expected FL/FR/RR/RL wheel rates,
+controller-reported and `/joint_states` wheel rates, wheel positions, raw and
+filtered odometry twist, IMU yaw rate, pose-derived Gazebo body velocity, and
+simulation timestamps. Per-run JSON adds wheel RMSE, steady-state error, peak
+error, rise time, overshoot, settling time, ideal-versus-Gazebo chassis
+metrics, odometry-versus-Gazebo metrics, and the evidence classification.
+Gazebo data remains evaluation-only and is never connected to control, EKF,
+SLAM, AMCL, navigation, or TF.
+
+First run all ten short, low-speed primitives from isolated fresh simulations:
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 run mobile_base_tools evaluation_campaign \
+  --profiles diagnostic_low_forward,diagnostic_low_backward,diagnostic_low_left,diagnostic_low_right,diagnostic_low_rotate_positive,diagnostic_low_rotate_negative,diagnostic_low_forward_left,diagnostic_low_forward_right,diagnostic_low_backward_left,diagnostic_low_backward_right \
+  --modes raw_and_filtered --repetitions 1 \
+  --output-dir phase1_results/mecanum_low_speed_baseline
+```
+
+Then run the ten nominal primitives, also with one fresh simulation each:
+
+```bash
+ros2 run mobile_base_tools evaluation_campaign \
+  --profiles forward_1m,backward_1m,strafe_left_1m,strafe_right_1m,rotate_positive_90deg,rotate_negative_90deg,diagonal_forward_left,diagonal_forward_right,diagonal_backward_left,diagonal_backward_right \
+  --modes raw_and_filtered --repetitions 1 \
+  --output-dir phase1_results/mecanum_nominal_baseline
+```
+
+Inspect `campaign_summary.json`, then each isolated repetition's
+`summary.json`, `run_results/*.json`, `trajectories/*.csv`, plots, and
+`launch.log`. Root-cause labels use a documented 10 percent threshold:
+
+- Case A: expected wheel rates and measured wheel rates diverge.
+- Case B: wheel tracking is good but Gazebo chassis motion diverges.
+- Case C: Gazebo chassis motion is good but wheel odometry diverges.
+- Case D: wheel error is concentrated in acceleration/deceleration transients.
+- `within_threshold`: none of those stages exceeds the threshold.
+
+The baseline findings and calibration decision are recorded in
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md).
+
+Acceleration/deceleration behavior remains visible in the time series and the
+rise/overshoot/settling metrics. Do not tune radius, rotational geometry,
+roller/contact parameters, acceleration limits, or physics settings until the
+primitive evidence identifies a dominant case.
+
 Troubleshooting:
 
 - No ground-truth pose: confirm the `empty` world is running and

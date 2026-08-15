@@ -36,6 +36,14 @@ PROFILES = (
     'diagonal_forward_left', 'diagonal_forward_right',
     'diagonal_backward_left', 'diagonal_backward_right', 'square_1m',
 )
+DIAGNOSTIC_PROFILES = (
+    'diagnostic_low_forward', 'diagnostic_low_backward',
+    'diagnostic_low_left', 'diagnostic_low_right',
+    'diagnostic_low_rotate_positive', 'diagnostic_low_rotate_negative',
+    'diagnostic_low_forward_left', 'diagnostic_low_forward_right',
+    'diagnostic_low_backward_left', 'diagnostic_low_backward_right',
+)
+ALLOWED_PROFILES = PROFILES + DIAGNOSTIC_PROFILES
 
 
 class LifecycleBlocked(RuntimeError):
@@ -256,7 +264,7 @@ def main():
     args = parser.parse_args()
     profiles = [value.strip() for value in args.profiles.split(',') if value]
     modes = [value.strip() for value in args.modes.split(',') if value]
-    if set(profiles) - set(PROFILES):
+    if set(profiles) - set(ALLOWED_PROFILES):
         parser.error('unknown profile')
     if set(modes) - {'raw_only', 'raw_and_filtered'}:
         parser.error('unknown mode')
