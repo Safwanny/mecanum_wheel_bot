@@ -269,13 +269,22 @@ documented in prose instead. What to watch:
 3. **Calibration constants are duplicated in five places** (xacro properties, xacro
    args, `controllers.yaml`, launch defaults ×2, runner parameter defaults). There is
    no single source of truth; the static tests catch some but not all divergence.
+   The same duplication bites for *validation*: `roller_collision_model` is checked
+   against a hardcoded list in three separate places (`simulation.launch.py`
+   `_resolve_world`, `generate_sim_sdf.py` argparse choices, `odometry_test_runner.py`),
+   so adding a contact model means editing all three or it fails at launch.
 4. **`odometry_test_runner.py` is 1493 lines in one class** with ~60 parameters — by
    far the largest and least decomposed file. Its pure math already lives elsewhere;
    the orchestration (state machine, watchdogs, reset, reporting) has not been split.
-5. **Residual physical error is real and distance-dependent.** Nominal primitives sit
-   at 0.72–4.86% diagnostic error, but 5 m runs reach 8.09% (forward-right diagonal,
-   408 mm endpoint error). Lateral/diagonal motion is still the weak axis. Do not
-   treat sim odometry as ground truth for long traverses.
+5. **Residual physical error is real and distance-dependent.** Focused low-speed
+   primitives sit at ~2.9% diagnostic error; 5 m runs reach 8.09% (forward-right
+   diagonal, 408 mm endpoint error). Lateral/diagonal motion is the weak axis. Do not
+   treat sim odometry as ground truth for long traverses. **The parasitic strafe yaw
+   (±0.035–0.039 rad/m) is a roller-phase artifact, not a contact defect** — running
+   all four wheels at one shared phase collapses it ~180×. The measured phases are
+   kept deliberately; see `docs/mecanum_motion_accuracy.md`. Do not retune friction,
+   damping, or physics step trying to remove it. Contact friction is a weak lever:
+   0.21 percentage points across a 3× range.
 6. **Ogre2 is mandatory for a usable LiDAR.** `render_engine:=ogre` pins all 720 beams
    to the 0.10 m minimum and cannot map — yet `odometry_evaluation.launch.py` defaults
    to `render_engine:=ogre`. That is fine for odometry (no scan needed) and a trap for
@@ -307,6 +316,7 @@ documented in prose instead. What to watch:
 | --- | --- |
 | Change robot geometry | `description/urdf/properties.xacro` → then `controllers.yaml`, runner defaults, and `test_explicit_mecanum_rollers.py` |
 | Add a sensor | `urdf/<s>.xacro` + `<s>.gazebo.xacro`, bridge args in `simulation.launch.py`, contract in `timestamp_contracts.yaml`, assert in `test_sensor_description.py` |
+| Change contact physics | `generate_sim_sdf.py` `inject_roller_surfaces` — **not** the xacro. `<gazebo reference>` friction tags are dropped by `gz sdf -p` and do nothing |
 | Change TF ownership | `simulation.launch.py` spawner pair + `ekf.yaml` `publish_tf` + `tf_validator.evaluate_contract` |
 | Add a motion profile | `tools/config/odometry_tests.yaml` (validated by `motion_profiles.py`) |
 | Add navigation | new package; do **not** extend `mobile_base_localization` (its mutual-exclusion contract is tested) |

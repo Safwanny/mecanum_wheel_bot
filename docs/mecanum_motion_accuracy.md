@@ -46,7 +46,7 @@ as proof of a valid campaign.
 | Roller phase | measured phases, all-zero, handed pairs | Keep measured phases; alternatives produced 28--43% aggregate error. |
 | Joint damping | `0`, `0.00025`, `0.0005`, `0.001`, `0.002` | Use `0`; independently reduced focused mean error from 15.87% to 14.00%. |
 | Joint friction | `0`, `0.0000125`, `0.000025`, `0.00005`, `0.0001` | Use `0`; higher passive bearing resistance worsened contact motion. |
-| Contact friction | `0.4`, `0.6`, `0.8`, `1.0`, `1.2` | Keep isotropic `0.8`; no alternative produced a robust aggregate gain. |
+| Contact friction | `0.4`, `0.6`, `0.8`, `1.0`, `1.2` | **Superseded — this comparison was invalid.** The friction values never reached the physics engine, so all five candidates were the same run. See [Contact parameters never reached the engine](#contact-parameters-never-reached-the-engine). |
 | Physics step | `1.0`, `0.5`, `0.25 ms` | Keep `1.0 ms`; smaller steps were slower and increased focused mean error to 16.78% and 20.74%. |
 | Controller limiting | installed Jazzy controller inspected | No acceleration/deceleration limiter exists in this controller version, so no unsupported parameter was added. |
 | Collision shape | cylinder, dynamic mesh attempts, primitive barrel | Use the primitive barrel; DART did not produce usable dynamic contact from the attempted triangle/convex mesh path. |
@@ -164,6 +164,103 @@ one roller from one collision to nine (360 primitive roller collisions total).
 Measured real-time factor, including campaign orchestration overhead, averaged
 about `0.88` for the nominal campaign and `0.82--0.89` for the 5 m runs on the
 development machine.
+
+## Contact parameters never reached the engine
+
+The friction row in the table above compared five identical simulations.
+
+`gz sdf -p` does not implement the Gazebo-Classic `<gazebo reference>` friction
+vocabulary. The `mu1`, `mu2`, `kp`, and `kd` authored on all 40 roller links
+were therefore discarded during URDF-to-SDF conversion, and the generated model
+that Gazebo actually spawned contained:
+
+| In the generated SDF | Before the fix | After the fix |
+| --- | ---: | ---: |
+| Roller collisions | 360 | 360 |
+| ...carrying a `<surface>` | **0** | **360** |
+| `<mu>` / `<mu2>` / `<kp>` / `<kd>` anywhere | **0** | 360 each |
+
+Confirmed for both `barrel` and `cylinder`, so it was not an artifact of the
+nine-sphere collision naming. Every roller contact ran on the sdformat default
+`mu` of `1.0`, never the configured `0.8`. `generate_sim_sdf.py` now injects a
+real SDF `<surface>` into every roller collision and refuses to emit a model
+whose rollers lack one, so the failure cannot recur silently.
+
+### Corrected friction sweep
+
+Re-run on the focused low-speed subset with the parameter genuinely applied,
+one repetition per profile, isolated `ROS_DOMAIN_ID` and `GZ_PARTITION` per
+candidate, each verified to have produced four completed runs:
+
+| `roller_contact_mu` | Focused mean diagnostic error | Maximum |
+| ---: | ---: | ---: |
+| `0.4` | 3.09% | 3.76% |
+| `0.6` | 2.99% | 3.73% |
+| `0.8` | 2.92% | 3.63% |
+| `1.0` | 2.89% | 3.72% |
+| `1.2` | 2.88% | 3.69% |
+
+The response is monotonic across all five candidates, which is the evidence
+that the parameter is live; a random ordering of five values would occur about
+1.7% of the time. Response saturates above `1.0`, so `1.0` is now the default.
+It is also the value the simulation ran at unintentionally, which keeps the
+earlier recorded results comparable with later ones.
+
+Friction is nonetheless a weak lever here: `0.21` percentage points across a
+threefold range. It is not the dominant term in the residual error.
+
+## Parasitic strafe yaw is roller-phase asymmetry
+
+The residual strafe signature is a yaw drift of equal magnitude and opposite
+sign in the two directions. Two candidate mechanisms were tested.
+
+**Support-radius ripple — rejected as the driver.** The ten-roller ring makes
+the effective support radius vary between `29.518` and `30.744 mm`, a
+`1.226 mm` peak-to-peak ripple, `3.99%` of the radius, while the controller
+assumes a constant `30.744 mm`. The ripple is real and worth recording, but
+modelling its contribution to yaw gives about `-0.0002 rad/m` against a
+measured `-0.035 rad/m` — roughly 170 times too small to be the cause.
+
+**Inter-wheel phase asymmetry — confirmed.** The four wheels carry different
+measured phases spanning `0.197` to `0.480 rad`, which is 45% of one
+`0.628 rad` roller pitch, so their contact events never cancel. Running all
+four wheels at one shared phase, with every other property unchanged:
+
+| Case | Left strafe yaw | Right strafe yaw | Error (left / right) |
+| --- | ---: | ---: | ---: |
+| Measured phases (shipped) | `-0.03575 rad/m` | `+0.03893 rad/m` | 3.48% / 3.81% |
+| Uniform phase `0.25` | `+0.00007 rad/m` | `-0.00020 rad/m` | 2.93% / 2.58% |
+
+A roughly 180-fold reduction. Phase asymmetry, not contact quality, produces
+the parasitic strafe yaw.
+
+**The measured phases are kept.** They describe the physical wheels, and a real
+robot whose rollers sit at fixed relative phases would show the same bias for a
+given strafe. What the simulation reports is one sample: on hardware the phase
+relationship at the start of any run is effectively arbitrary, so the bias
+varies between runs and averages toward zero, while the simulation fixes one
+draw and reports it deterministically. Treat the strafe yaw as a roller-phase
+artifact of a single configuration, not as a contact defect, and do not retune
+friction, damping, or physics step trying to remove it.
+
+## Rejected: anisotropic cylinder wheel model
+
+A single cylinder per wheel with a handed `fdir1` friction cone at 45 degrees
+was implemented as an opt-in fourth of the contact cost (4 contacts instead of
+360). It generated valid SDF and passed static checks, but did not drive.
+
+With traction high across the roller axis the chassis moved backwards; with the
+corrected assignment — high along the roller axis, low across it, since a
+roller rolls perpendicular to its own axis and resists sliding along it — the
+direction became correct but the base oscillated in place, reaching at most
+12% of a `0.25 m` strafe target with along-track displacement alternating
+between `+0.031` and `-0.028 m`. That is contact instability rather than a
+tuning offset, so no `mu`/`mu2` sweep was pursued and the change was reverted
+rather than shipped in a non-working state.
+
+The `fdir1` prohibition in `_validate_explicit_rollers` therefore remains
+absolute: an explicit-roller model must produce the mecanum effect through real
+roller geometry and contact.
 
 ## Validation commands
 
