@@ -121,7 +121,7 @@ class OdometryTestRunner(Node):
             'center_projection_sum': 0.142,
             'roller_joint_damping': 0.0,
             'roller_joint_friction': 0.0,
-            'roller_contact_mu': 0.8,
+            'roller_contact_mu': 1.0,
             'roller_collision_model': 'barrel',
             'physics_max_step_size': 0.001,
             'front_left_roller_phase': 0.22193969,

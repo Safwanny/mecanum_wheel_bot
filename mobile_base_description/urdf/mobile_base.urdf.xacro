@@ -5,7 +5,7 @@
   <xacro:arg name="controllers_file" default=""/>
   <xacro:arg name="roller_joint_damping" default="0.0"/>
   <xacro:arg name="roller_joint_friction" default="0.0"/>
-  <xacro:arg name="roller_contact_mu" default="0.8"/>
+  <xacro:arg name="roller_contact_mu" default="1.0"/>
   <xacro:arg name="roller_collision_model" default="barrel"/>
   <xacro:arg name="front_left_roller_phase" default="0.22193969"/>
   <xacro:arg name="front_right_roller_phase" default="0.48030419"/>

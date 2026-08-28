@@ -197,7 +197,7 @@ def generate_launch_description():
         DeclareLaunchArgument('roller_joint_damping', default_value='0.0'),
         DeclareLaunchArgument(
             'roller_joint_friction', default_value='0.0'),
-        DeclareLaunchArgument('roller_contact_mu', default_value='0.8'),
+        DeclareLaunchArgument('roller_contact_mu', default_value='1.0'),
         DeclareLaunchArgument(
             'roller_collision_model', default_value='barrel'),
         DeclareLaunchArgument(

@@ -255,7 +255,7 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--roller-joint-damping', default='0.0')
     parser.add_argument('--roller-joint-friction', default='0.0')
-    parser.add_argument('--roller-contact-mu', default='0.8')
+    parser.add_argument('--roller-contact-mu', default='1.0')
     parser.add_argument('--roller-contact-mu2', default='')
     parser.add_argument('--roller-contact-kp', default='100000.0')
     parser.add_argument('--roller-contact-kd', default='10.0')
