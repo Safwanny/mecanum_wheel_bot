@@ -26,6 +26,14 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/../mobile_base_gazebo
   )
 
+  add_test(
+    NAME verify_roller_contact_surfaces
+    COMMAND
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_roller_contact_surfaces.py
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
   add_launch_test(
     test/test_sensor_topics.py
     TIMEOUT 150

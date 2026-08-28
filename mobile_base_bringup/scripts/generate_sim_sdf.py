@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import argparse
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -68,7 +69,69 @@ def _validated_named_elements(root, tag, pattern):
     return elements
 
 
-def _validate_explicit_rollers(root, collision_model):
+def _nonnegative_finite(value, field):
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0:
+        raise RuntimeError(f'{field} must be finite and nonnegative')
+    return number
+
+
+def _subelement_with_text(parent, tag, value):
+    element = ET.SubElement(parent, tag)
+    element.text = str(value)
+    return element
+
+
+def build_roller_surface(mu, mu2, kp, kd, torsional_coefficient):
+    """Build one SDF contact surface for a roller collision."""
+    # Element order follows the installed sdformat surface schema: friction
+    # (torsional before ode) and then contact.
+    surface = ET.Element('surface')
+    friction = ET.SubElement(surface, 'friction')
+    torsional = ET.SubElement(friction, 'torsional')
+    _subelement_with_text(torsional, 'coefficient', torsional_coefficient)
+    ode_friction = ET.SubElement(friction, 'ode')
+    _subelement_with_text(ode_friction, 'mu', mu)
+    _subelement_with_text(ode_friction, 'mu2', mu2)
+    contact = ET.SubElement(surface, 'contact')
+    ode_contact = ET.SubElement(contact, 'ode')
+    _subelement_with_text(ode_contact, 'kp', kp)
+    _subelement_with_text(ode_contact, 'kd', kd)
+    return surface
+
+
+def inject_roller_surfaces(root, mu, mu2, kp, kd, torsional_coefficient):
+    """Write an explicit contact surface into every roller collision."""
+    # gz sdf -p does not implement the Gazebo-Classic <gazebo reference>
+    # friction vocabulary, so mu1, mu2, kp, and kd authored in the xacro are
+    # discarded during URDF-to-SDF conversion. Without this injection every
+    # roller collision silently falls back to the sdformat defaults (mu and
+    # mu2 of 1.0) and the configured contact parameters never reach the
+    # physics engine. Returns the number of collisions given a surface.
+    mu = _nonnegative_finite(mu, 'mu')
+    mu2 = _nonnegative_finite(mu2, 'mu2')
+    kp = _nonnegative_finite(kp, 'kp')
+    kd = _nonnegative_finite(kd, 'kd')
+    torsional_coefficient = _nonnegative_finite(
+        torsional_coefficient, 'torsional_coefficient')
+
+    injected = 0
+    roller_links = _validated_named_elements(root, 'link', ROLLER_LINK)
+    for link in roller_links.values():
+        for collision in link.findall('collision'):
+            for existing in collision.findall('surface'):
+                collision.remove(existing)
+            collision.append(
+                build_roller_surface(mu, mu2, kp, kd, torsional_coefficient)
+            )
+            injected += 1
+    if injected == 0:
+        raise RuntimeError(
+            'No roller collisions found to receive a contact surface')
+    return injected
+
+
+def _validate_explicit_rollers(root, collision_model, expected_mu):
     driven_joint_names = {name + '_wheel_joint' for name in WHEEL_NAMES}
     driven_joints = [
         joint.attrib.get('name') for joint in root.findall('.//joint')
@@ -151,6 +214,24 @@ def _validate_explicit_rollers(root, collision_model):
                 raise RuntimeError(
                     f'Roller link {name} expected {expected_geometry} '
                     f'collision, found {geometry[0].tag}')
+            # gz sdf -p drops the Gazebo-Classic friction vocabulary, so an
+            # absent surface here means the contact parameters silently
+            # reverted to the sdformat defaults instead of the configured
+            # values. Fail loudly rather than simulate the wrong contact.
+            friction_mu = collision.findtext('surface/friction/ode/mu')
+            if friction_mu is None:
+                raise RuntimeError(
+                    f'Roller link {name} has a collision with no '
+                    'surface/friction/ode/mu; contact friction would silently '
+                    'fall back to the sdformat default'
+                )
+            if not math.isclose(
+                    float(friction_mu), expected_mu, rel_tol=1e-9,
+                    abs_tol=1e-12):
+                raise RuntimeError(
+                    f'Roller link {name} has contact mu {friction_mu}, '
+                    f'expected {expected_mu}'
+                )
     expected_total = 360 if collision_model == 'barrel' else 40
     if collision_count != expected_total:
         raise RuntimeError(
@@ -175,6 +256,10 @@ def main():
     parser.add_argument('--roller-joint-damping', default='0.0')
     parser.add_argument('--roller-joint-friction', default='0.0')
     parser.add_argument('--roller-contact-mu', default='0.8')
+    parser.add_argument('--roller-contact-mu2', default='')
+    parser.add_argument('--roller-contact-kp', default='100000.0')
+    parser.add_argument('--roller-contact-kd', default='10.0')
+    parser.add_argument('--roller-torsional-coefficient', default='0.0')
     parser.add_argument(
         '--roller-collision-model', choices=('cylinder', 'barrel'),
         default='barrel')
@@ -244,7 +329,18 @@ def main():
                 uri.text.startswith(prefix) for prefix in WHEEL_URI_PREFIXES):
             raise RuntimeError('Unresolved wheel visual URI: ' + uri.text)
 
-    _validate_explicit_rollers(root, args.roller_collision_model)
+    contact_mu = float(args.roller_contact_mu)
+    contact_mu2 = float(args.roller_contact_mu2 or args.roller_contact_mu)
+    inject_roller_surfaces(
+        root,
+        contact_mu,
+        contact_mu2,
+        args.roller_contact_kp,
+        args.roller_contact_kd,
+        args.roller_torsional_coefficient,
+    )
+
+    _validate_explicit_rollers(root, args.roller_collision_model, contact_mu)
 
     ET.ElementTree(root).write(
         args.output,

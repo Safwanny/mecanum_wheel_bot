@@ -23,12 +23,16 @@
                   value="$(arg roller_joint_damping)"/>
   <xacro:property name="roller_joint_friction"
                   value="$(arg roller_joint_friction)"/>
-  <xacro:property name="roller_contact_mu"
-                  value="$(arg roller_contact_mu)"/>
   <xacro:property name="roller_collision_model"
                   value="$(arg roller_collision_model)"/>
-  <xacro:property name="roller_contact_kp" value="100000.0"/>
-  <xacro:property name="roller_contact_kd" value="10.0"/>
+  <!--
+    Contact friction and stiffness (mu, mu2, kp, kd) are intentionally absent
+    here. They cannot be expressed in a URDF that survives gz sdf -p, so they
+    are applied by mobile_base_bringup/scripts/generate_sim_sdf.py when the
+    simulation SDF is produced. The roller_contact_mu xacro argument is still
+    accepted so callers can pass it uniformly, but it shapes the generated
+    SDF rather than this description.
+  -->
 
   <!-- wheelbase is front-to-rear wheel-center spacing; wheel_separation is track width. -->
   <xacro:property name="wheelbase" value="0.150"/>

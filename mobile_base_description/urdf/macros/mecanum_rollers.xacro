@@ -89,11 +89,15 @@
                   friction="${roller_joint_friction}"/>
       </joint>
 
+      <!--
+        Contact friction and stiffness are NOT set here. mu1/mu2/kp/kd are
+        Gazebo-Classic extension tags that gz sdf -p silently discards during
+        URDF-to-SDF conversion, so authoring them here has no effect on the
+        simulated contact. generate_sim_sdf.py injects a real SDF <surface>
+        into every roller collision instead, and refuses to emit a model
+        whose rollers lack one. Keep that script the single authority.
+      -->
       <gazebo reference="${prefix}${wheel_name}_roller_${index}_link">
-        <mu1>${roller_contact_mu}</mu1>
-        <mu2>${roller_contact_mu}</mu2>
-        <kp>${roller_contact_kp}</kp>
-        <kd>${roller_contact_kd}</kd>
         <selfCollide>false</selfCollide>
       </gazebo>
 

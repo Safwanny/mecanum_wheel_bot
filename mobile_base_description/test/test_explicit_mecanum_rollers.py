@@ -445,12 +445,15 @@ def main():
                 abs_tol=TOLERANCE,
             )
 
+            # mu1/mu2/kp/kd are Gazebo-Classic extension tags that gz sdf -p
+            # discards, so authoring them here would silently do nothing.
+            # Contact surfaces are injected at SDF generation instead; see
+            # mobile_base_bringup/test/test_roller_contact_surfaces.py.
             roller_gazebo = gazebo_by_reference[link_name]
-            mu1 = float(roller_gazebo.find('mu1').text)
-            mu2 = float(roller_gazebo.find('mu2').text)
-            assert mu1 > 0.0 and math.isfinite(mu1)
-            assert mu2 > 0.0 and math.isfinite(mu2)
-            assert math.isclose(mu1, mu2, abs_tol=TOLERANCE)
+            assert roller_gazebo.find('mu1') is None
+            assert roller_gazebo.find('mu2') is None
+            assert roller_gazebo.find('kp') is None
+            assert roller_gazebo.find('kd') is None
             assert roller_gazebo.find('fdir1') is None
             assert roller_gazebo.find('selfCollide').text == 'false'
 
@@ -539,9 +542,11 @@ def main():
         assert float(dynamics.attrib['friction']) == 0.0
         theta = math.atan2(*reversed(vector(joint.find('origin').attrib['xyz'])[::2]))
         assert abs(angle_error(theta, 0.3)) < TOLERANCE
+        # roller_contact_mu deliberately leaves no trace in the URDF; it is
+        # applied when the simulation SDF is generated. The corresponding
+        # override check lives in the generator test.
         gazebo = calibrated_gazebo[f'{wheel_name}_roller_0_link']
-        assert math.isclose(float(gazebo.find('mu1').text), 0.6)
-        assert math.isclose(float(gazebo.find('mu2').text), 0.6)
+        assert gazebo.find('mu1') is None
 
     cylinder_robot = load_robot(xacro_file, {
         'roller_collision_model': 'cylinder',
