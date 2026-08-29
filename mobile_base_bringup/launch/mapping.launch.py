@@ -42,6 +42,13 @@ def generate_launch_description():
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('render_engine', default_value='ogre2'),
+        # Wheel contact model, forwarded to simulation.launch.py: 'barrel' or
+        # 'cylinder' for the explicit 40-roller physics, or
+        # 'husarion_cylinder' for the single-cylinder anisotropic model.
+        DeclareLaunchArgument(
+            'roller_collision_model', default_value='barrel'),
+        DeclareLaunchArgument(
+            'velocity_smoother', default_value='false'),
         # Preserve the wrapper's value before simulation.launch.py receives
         # rviz=false. Include launch arguments share the launch context.
         SetLaunchConfiguration(
@@ -56,6 +63,10 @@ def generate_launch_description():
                 'rviz': 'false',
                 'render_engine': LaunchConfiguration('render_engine'),
                 'localization': 'true',
+                'roller_collision_model': LaunchConfiguration(
+                    'roller_collision_model'),
+                'velocity_smoother': LaunchConfiguration(
+                    'velocity_smoother'),
             }.items(),
         ),
         IncludeLaunchDescription(

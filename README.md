@@ -200,7 +200,7 @@ mkdir -p "$HOME/ros2_ws/maps/mobile_base"
 
 ros2 run nav2_map_server map_saver_cli \
   -t /map \
-  -f "$HOME/ros2_ws/maps/mobile_base/navigation_basic" \
+  -f "$HOME/ros2_ws/src/mobile_base/maps/mobile_base/navigation_basic" \
   --ros-args \
   -p map_subscribe_transient_local:=true \
   -p save_map_timeout:=10.0
@@ -525,18 +525,115 @@ ros2 launch mobile_base_bringup simulation.launch.py
 
 `world` accepts an installed world name (with or without `.sdf`) or an absolute
 SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
-`start_controller`, `localization`, `render_engine`, `x`, `y`, `z`, and `yaw`.
+`start_controller`, `localization`, `render_engine`, `roller_collision_model`,
+`velocity_smoother`, `x`, `y`, `z`, and `yaw`. `roller_collision_model` selects
+the motion method and is forwarded by `mapping.launch.py`,
+`localization.launch.py`, and `odometry_evaluation.launch.py`.
 Calibration experiments additionally expose roller damping, joint friction,
 contact friction, collision model, the four roller phases, and physics maximum
 step size; normal launches use the validated defaults.
 Phase 1 intentionally supports one un-namespaced robot. A misleading partial
 `namespace` argument was removed rather than implying multi-robot support.
 
-Wheel appearance comes from the full position-specific mecanum wheel meshes. Gazebo
-motion is physical: the controller drives four wheel joints, each wheel carries ten
-continuous passive roller joints, and the 40 primitive roller collisions contact the
-ground. The driven hub links intentionally have no collision geometry, so wheel-ground
-contact cannot bypass the rollers.
+Wheel appearance comes from the full position-specific mecanum wheel meshes. How
+wheel-ground contact is simulated depends on the selected contact model, below.
+
+## Wheel contact models
+
+Two motion methods are available. They are selected with `roller_collision_model`
+on any launch file in this README and differ *only* in how wheel-ground contact is
+simulated. The controller, kinematics, wheel joint names, odometry, EKF, TF,
+sensors, and topics are identical in both.
+
+| | `barrel` (default) | `husarion_cylinder` |
+| --- | --- | --- |
+| Mechanism | 40 explicit passive roller links | one cylinder per driven hub with handed anisotropic friction |
+| Ground contacts | 360 sphere collisions | 4 cylinder collisions |
+| Diagnostic error | 2.92% | **0.47%** |
+| Worst profile | 3.79% | **0.55%** |
+| Strafe yaw drift | `+-0.035 rad/m` | **`+-0.00044 rad/m`** |
+| Cross-axis drift | 0.75-2.41 mm | **0.00-0.03 mm** |
+| Real-time factor | 0.60-0.80 | **1.00** |
+| Coast after last command | 0.21-2.99 mm | **0.00-0.77 mm** |
+| Root-cause classification | case B | **within_threshold** |
+
+Figures are one repetition of the four low-speed diagnostic profiles at `0.10 m/s`,
+so they rank the models rather than establishing tolerances. Method and rejected
+alternatives are in [`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md).
+
+`barrel` remains the default because it models the physical mechanism: ten measured
+rollers per wheel, driven hubs with no collision, so contact cannot bypass the
+rollers. `husarion_cylinder` replaces that with a direction-dependent friction cone
+following the shipping Husarion ROSbot XL description; it is faster and currently
+more accurate, but it is an approximation rather than the mechanism. A third value,
+`cylinder`, keeps the straight-cylinder roller geometry for comparison with the
+pre-calibration model.
+
+`husarion_cylinder` emits no roller links, so `/joint_states` carries four wheel
+joints instead of 44.
+
+### Selecting a model
+
+Append `roller_collision_model:=husarion_cylinder` to any launch. Every command in
+this README works with either value.
+
+```bash
+# Plain simulation
+ros2 launch mobile_base_bringup simulation.launch.py \
+  roller_collision_model:=husarion_cylinder
+
+# Mapping (SLAM Toolbox)
+ros2 launch mobile_base_bringup mapping.launch.py \
+  world:=navigation_basic roller_collision_model:=husarion_cylinder
+
+# Saved-map localization (AMCL)
+ros2 launch mobile_base_bringup localization.launch.py \
+  world:=navigation_basic roller_collision_model:=husarion_cylinder \
+  map:="$HOME/ros2_ws/src/mobile_base/maps/mobile_base/navigation_basic.yaml"
+
+# Odometry evaluation campaign
+ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
+  roller_collision_model:=husarion_cylinder \
+  test_profile:=all repetitions:=1 evaluation_mode:=raw_only localization:=false \
+  output_dir:=phase1_results/husarion_nominal
+```
+
+Omit the argument, or pass `roller_collision_model:=barrel`, for the roller model:
+
+```bash
+ros2 launch mobile_base_bringup mapping.launch.py world:=navigation_basic
+```
+
+To compare the two on identical profiles, give each run its own ROS domain and
+Gazebo partition and confirm Gazebo has exited in between. `ros2 launch` returns 0
+even when a campaign produced nothing, so check the result count rather than the
+exit status:
+
+```bash
+for MODEL in barrel husarion_cylinder; do
+  ROS_DOMAIN_ID=41 GZ_PARTITION="cmp_$MODEL" \
+  ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
+    roller_collision_model:="$MODEL" \
+    profile_sequence:=diagnostic_low_left,diagnostic_low_right,diagnostic_low_forward_right,diagnostic_low_backward_left \
+    repetitions:=1 evaluation_mode:=raw_only localization:=false \
+    output_dir:="phase1_results/cmp_$MODEL"
+  ls "phase1_results/cmp_$MODEL"/run_results/*.json | wc -l   # expect 4
+done
+```
+
+The `husarion_cylinder` contact parameters are exposed for experiments:
+`wheel_contact_mu` (default `0.8`, along the roller axis), `wheel_contact_mu2`
+(`0.2`, across it), and `wheel_contact_slip1` (`0.0`). Upstream uses `slip1: 0.035`,
+which suits their heavier base; here it cut strafe completion from 95.7% to 67.7%,
+so it is disabled by default.
+
+### Which model to use
+
+Use `husarion_cylinder` for mapping, navigation, and anything where real-time factor
+or stopping behaviour matters. Use `barrel` when the question is about the physical
+roller mechanism itself, or to reproduce earlier recorded results. Both branches of
+this repository build and test cleanly, and the generated `barrel` model is
+byte-identical to before `husarion_cylinder` was added.
 
 ## Explicit passive roller model
 
@@ -1072,6 +1169,19 @@ For holonomic movement, hold Shift:
 
 Any unmapped key sends a stop command; `Ctrl-C` exits the teleop node. For hardware,
 keep the same stamped command path but set `use_sim_time:=false`.
+
+`teleop_twist_keyboard` publishes one message per keypress from a blocking read.
+There is no key-release event, so letting go of a key does not stop the robot:
+the last command stands until the controller's `reference_timeout` of `0.5 s`
+expires, which is about `7.5 cm` of further travel at the `0.15 m/s` default.
+Press an unmapped key such as `k` to stop deliberately rather than releasing.
+
+An opt-in `nav2_velocity_smoother` stage exists to ramp commands instead of
+stepping them (`velocity_smoother:=true`, then publish to `/mobile_base/cmd_vel`
+rather than the controller reference). It is **off by default and unverified**:
+acceleration limiting works, but deceleration behaviour on command cessation is an
+open question recorded in `mobile_base_bringup/config/velocity_smoother.yaml`.
+It also does not shorten the `0.5 s` above.
 
 The teleop `frame_id` is `base_link` because the controller command is a body-frame
 twist. Odometry TF is published as `odom -> base_footprint`, while the URDF keeps the
