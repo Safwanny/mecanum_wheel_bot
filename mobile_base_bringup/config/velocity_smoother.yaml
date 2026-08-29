@@ -1,0 +1,55 @@
+# UNVERIFIED -- the node is wired up and activates, but is disabled by default.
+#
+# Acceleration limiting demonstrably works: driving 0.15 m/s from rest puts
+# 0.05 then 0.10 then 0.15 on the controller's reference topic, exactly the
+# max_accel of 1.0 m/s^2 at 20 Hz.
+#
+# Deceleration is the open question. Commanding for 3 s and then stopping
+# produced ~9.5 s of continued 0.15 on the reference topic with no decay and no
+# zero, i.e. the smoother held and republished the last command. Because it
+# republishes at 20 Hz the controller's reference_timeout never fires, so a
+# transient command would become indefinite motion -- worse than no smoother.
+#
+# That test drove the node with ros2 topic pub, which leaves header.stamp at
+# zero, and velocity_timeout is evaluated against message time, so the result
+# may be an artefact rather than real behaviour. Re-test with real stamped
+# teleop before enabling this. Until then velocity_smoother defaults to false.
+velocity_smoother:
+  ros__parameters:
+    # The stock Jazzy mecanum_drive_controller exposes no velocity or
+    # acceleration parameters at all -- its whole parameter set is joint names,
+    # kinematics, covariances, TF settings and reference_timeout -- so a
+    # dropped command is a step change straight to zero. Husarion maintain a
+    # forked controller purely to add these limits; this achieves the same
+    # without a fork.
+    smoothing_frequency: 20.0
+    scale_velocities: false
+
+    # OPEN_LOOP ramps from the last commanded value rather than from measured
+    # odometry, so the smoother does not depend on the odometry chain it is
+    # partly there to protect.
+    feedback: "OPEN_LOOP"
+
+    # Order is [x, y, theta]. y must be non-zero: this base is holonomic, and
+    # a zero lateral limit would silently forbid strafing.
+    max_velocity: [0.5, 0.5, 2.0]
+    min_velocity: [-0.5, -0.5, -2.0]
+
+    # Deceleration is deliberately stronger than acceleration, following the
+    # same asymmetry Husarion use. Stopping short is the point of this node.
+    max_accel: [1.0, 1.0, 3.0]
+    max_decel: [-1.5, -1.5, -4.0]
+
+    # Must stay zero. nav2's smoother assigns last_cmd_ before zeroing, so a
+    # deadband placed in the feedback path erases each tick's ramp increment
+    # and the robot never accelerates.
+    deadband_velocity: [0.0, 0.0, 0.0]
+
+    # Matches the controller's reference_timeout so both stages give up on a
+    # stale command at the same moment.
+    velocity_timeout: 0.5
+
+    # TwistStamped is opt-in on Jazzy and the default only from Kilted. The
+    # controller's reference topic is TwistStamped, so without this the
+    # smoother publishes Twist and nothing reaches the controller.
+    enable_stamped_cmd_vel: true

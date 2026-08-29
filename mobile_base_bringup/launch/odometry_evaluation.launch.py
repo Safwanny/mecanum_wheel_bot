@@ -158,6 +158,10 @@ def generate_launch_description():
             'wheel_contact_mu': LaunchConfiguration('wheel_contact_mu'),
             'wheel_contact_mu2': LaunchConfiguration('wheel_contact_mu2'),
             'wheel_contact_slip1': LaunchConfiguration('wheel_contact_slip1'),
+            # The campaign publishes exact constant twists and measures what
+            # the chassis does with them; a ramp in between would change the
+            # commanded signal and invalidate every accuracy metric.
+            'velocity_smoother': 'false',
             'front_left_roller_phase': LaunchConfiguration(
                 'front_left_roller_phase'),
             'front_right_roller_phase': LaunchConfiguration(
