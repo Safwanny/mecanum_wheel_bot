@@ -118,7 +118,7 @@ class OdometryTestRunner(Node):
             'joint_states_topic': '/joint_states',
             'imu_topic': '/imu/data',
             'wheels_radius': 0.03074443,
-            'center_projection_sum': 0.142,
+            'center_projection_sum': 0.12521,
             'physics_max_step_size': 0.001,
             'command_frame': 'base_link',
             'calibration_baseline_commit': (

@@ -33,6 +33,8 @@ def main():
     assert 'base_frame_id: base_footprint' in controllers
     assert 'odom_frame_id: odom' in controllers
     assert 'reference_timeout: 0.5' in controllers
+    assert 'sum_of_robot_center_projection_on_X_Y_axis: 0.12521' \
+        in controllers
 
     launch = read(bringup / 'launch' / 'simulation.launch.py')
     assert 'mobile_base_sim.rviz' in launch
@@ -71,6 +73,8 @@ def main():
     assert "default_value='false'" in evaluation_launch
     assert "'physics_max_step_size'" in evaluation_launch
     assert "'/tf'" not in evaluation_launch
+    assert "'center_projection_sum', default_value='0.12521'" \
+        in evaluation_launch
 
     package = ET.parse(bringup / 'package.xml').getroot()
     exec_depends = [elem.text for elem in package.findall('exec_depend')]

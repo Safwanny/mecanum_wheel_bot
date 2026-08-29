@@ -20,8 +20,8 @@ mobile_base_controller:
     kinematics:
       base_frame_offset: {x: 0.0, y: 0.0, theta: 0.0}
       wheels_radius: 0.03074443
-      # Half wheelbase (0.075) plus half track width (0.067), in metres.
-      sum_of_robot_center_projection_on_X_Y_axis: 0.142
+      # Effective rotational projection for the canonical wheel contact model.
+      sum_of_robot_center_projection_on_X_Y_axis: 0.12521
 
     base_frame_id: base_footprint
     odom_frame_id: odom

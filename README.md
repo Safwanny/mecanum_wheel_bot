@@ -527,8 +527,8 @@ and has no runtime model selector or contact-tuning launch arguments.
 Phase 1 intentionally supports one un-namespaced robot. A misleading partial
 `namespace` argument was removed rather than implying multi-robot support.
 
-Wheel appearance comes from the full position-specific mecanum wheel meshes. How
-wheel-ground contact is simulated depends on the selected contact model, below.
+Wheel appearance comes from the full position-specific mecanum wheel meshes.
+Wheel-ground contact always uses the canonical model described below.
 
 ## Mecanum wheel contact
 
@@ -550,6 +550,14 @@ This single-cylinder approximation preserves the visual wheel meshes and normal
 controller interfaces while reducing wheel contact topology to four collisions.
 There is no runtime contact-model selector. The validated constants are internal
 to the generator rather than public launch arguments.
+
+The wheel centers have a literal half-wheelbase plus half-track projection of
+`0.142 m`. Directional cylinder contact produces an effective rotational
+projection of `0.12521 m`, measured symmetrically from clockwise and
+counter-clockwise ground-truth runs. The mecanum controller uses the effective
+value for rotational inverse kinematics and wheel odometry. Wheel radius remains
+`0.03074443 m`, so the calibration does not alter forward, lateral, or diagonal
+kinematics.
 
 Standard workflows are therefore:
 

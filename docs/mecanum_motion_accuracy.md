@@ -24,6 +24,24 @@ steady-state tracking were correct. Nevertheless, lateral and several diagonal
 motions had 11--21% ground-truth chassis error. That is diagnostic Case B:
 correct wheel actuation with inaccurate roller/ground contact motion.
 
+## Canonical rotational calibration
+
+After the anisotropic single-cylinder contact implementation became canonical,
+fresh clockwise and counter-clockwise low-speed rotation runs exposed a
+symmetric rotational scale error. With the literal wheel-center projection of
+`0.142 m`, ground truth rotated `1.1340956` times as far as raw wheel odometry.
+Steady-state wheel-rate error was below `1.9e-9` normalized, while unintended
+translation stayed below `0.6 um`, excluding wheel order, signs, tracking, and
+contact asymmetry. Filtered odometry already followed the IMU and ground truth,
+so the EKF was not the source.
+
+The directional cylinder approximation therefore uses its measured effective
+rotational projection, `0.142 / 1.1340956 = 0.12521 m`, in the controller's
+inverse and forward kinematics. No friction, radius, gain, EKF, SLAM, AMCL, or
+TF parameter changed. Independent verification in both directions reduced the
+raw ground-truth yaw mismatch from `11.824%` to `0.001%`; filtered yaw error
+remained below `0.00077 rad`.
+
 Generated campaign data remains ignored under `phase1_results/final_fix/`.
 The measurements below remain useful engineering evidence, but their passive
 roller configuration and comparison controls are no longer active source.

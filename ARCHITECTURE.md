@@ -49,6 +49,13 @@ The controller consumes `geometry_msgs/msg/TwistStamped` on
 projection sum, signs, odometry semantics, limits, and covariance settings are
 stable robot contracts.
 
+The wheel centers are at `x=+/-0.075 m` and `y=+/-0.067 m`. The literal
+center projection is therefore `0.142 m`, but the canonical directional-contact
+approximation has a measured effective rotational projection of `0.12521 m`.
+The controller uses that calibrated value in both inverse kinematics and wheel
+odometry. The wheel radius remains the measured `0.03074443 m`; translational
+kinematics do not depend on the rotational projection.
+
 ## Canonical mecanum contact
 
 There is one supported simulation contact implementation:

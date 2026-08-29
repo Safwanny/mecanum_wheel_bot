@@ -157,7 +157,8 @@ def generate_launch_description():
         DeclareLaunchArgument('clock_stall_timeout', default_value='5.0'),
         DeclareLaunchArgument('motion_start_timeout', default_value='2.0'),
         DeclareLaunchArgument('wheels_radius', default_value='0.03074443'),
-        DeclareLaunchArgument('center_projection_sum', default_value='0.142'),
+        DeclareLaunchArgument(
+            'center_projection_sum', default_value='0.12521'),
         DeclareLaunchArgument(
             'output_dir', default_value='/tmp/mobile_base_phase1'
         ),
