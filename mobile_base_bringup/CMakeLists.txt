@@ -27,10 +27,10 @@ if(BUILD_TESTING)
   )
 
   add_test(
-    NAME verify_roller_contact_surfaces
+    NAME verify_mecanum_wheel_contact
     COMMAND
       ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_roller_contact_surfaces.py
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_mecanum_wheel_contact.py
       ${CMAKE_CURRENT_SOURCE_DIR}
   )
 

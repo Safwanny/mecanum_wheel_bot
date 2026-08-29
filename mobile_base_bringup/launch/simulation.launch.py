@@ -147,12 +147,6 @@ def _gazebo_environment():
 
 
 def _resolve_world(context, worlds_directory):
-    collision_model = LaunchConfiguration(
-        'roller_collision_model').perform(context)
-    if collision_model not in ('cylinder', 'barrel', 'husarion_cylinder'):
-        raise RuntimeError(
-            'roller_collision_model must be cylinder, barrel, or '
-            'husarion_cylinder')
     requested = LaunchConfiguration('world').perform(context)
     requested_path = Path(requested).expanduser()
     if requested_path.is_absolute():
@@ -246,28 +240,6 @@ def generate_launch_description():
                 model,
                 ' use_gazebo:=true controllers_file:=',
                 controllers,
-                ' roller_joint_damping:=',
-                LaunchConfiguration('roller_joint_damping'),
-                ' roller_joint_friction:=',
-                LaunchConfiguration('roller_joint_friction'),
-                ' roller_contact_mu:=',
-                LaunchConfiguration('roller_contact_mu'),
-                ' roller_collision_model:=',
-                LaunchConfiguration('roller_collision_model'),
-                ' wheel_contact_mu:=',
-                LaunchConfiguration('wheel_contact_mu'),
-                ' wheel_contact_mu2:=',
-                LaunchConfiguration('wheel_contact_mu2'),
-                ' wheel_contact_slip1:=',
-                LaunchConfiguration('wheel_contact_slip1'),
-                ' front_left_roller_phase:=',
-                LaunchConfiguration('front_left_roller_phase'),
-                ' front_right_roller_phase:=',
-                LaunchConfiguration('front_right_roller_phase'),
-                ' rear_right_roller_phase:=',
-                LaunchConfiguration('rear_right_roller_phase'),
-                ' rear_left_roller_phase:=',
-                LaunchConfiguration('rear_left_roller_phase'),
             ]
         ),
         value_type=str,
@@ -281,28 +253,6 @@ def generate_launch_description():
             controllers,
             '--output',
             simulation_sdf,
-            '--roller-joint-damping',
-            LaunchConfiguration('roller_joint_damping'),
-            '--roller-joint-friction',
-            LaunchConfiguration('roller_joint_friction'),
-            '--roller-contact-mu',
-            LaunchConfiguration('roller_contact_mu'),
-            '--roller-collision-model',
-            LaunchConfiguration('roller_collision_model'),
-            '--wheel-contact-mu',
-            LaunchConfiguration('wheel_contact_mu'),
-            '--wheel-contact-mu2',
-            LaunchConfiguration('wheel_contact_mu2'),
-            '--wheel-contact-slip1',
-            LaunchConfiguration('wheel_contact_slip1'),
-            '--front-left-roller-phase',
-            LaunchConfiguration('front_left_roller_phase'),
-            '--front-right-roller-phase',
-            LaunchConfiguration('front_right_roller_phase'),
-            '--rear-right-roller-phase',
-            LaunchConfiguration('rear_right_roller_phase'),
-            '--rear-left-roller-phase',
-            LaunchConfiguration('rear_left_roller_phase'),
         ],
         output='screen',
     )
@@ -573,43 +523,6 @@ def generate_launch_description():
                 default_value='true',
                 description='Start the mecanum ros2_control controller.',
             ),
-            DeclareLaunchArgument(
-                'roller_joint_damping', default_value='0.0'),
-            DeclareLaunchArgument(
-                'roller_joint_friction', default_value='0.0'),
-            DeclareLaunchArgument(
-                'roller_contact_mu', default_value='1.0'),
-            DeclareLaunchArgument(
-                'roller_collision_model', default_value='barrel',
-                description=(
-                    "Wheel contact model: 'barrel' or 'cylinder' for the "
-                    "explicit 40-roller physics, or 'husarion_cylinder' for "
-                    'the single-cylinder anisotropic-friction model.'),
-            ),
-            DeclareLaunchArgument(
-                'wheel_contact_mu', default_value='0.8',
-                description=(
-                    'husarion_cylinder only: friction along the roller axis.'),
-            ),
-            DeclareLaunchArgument(
-                'wheel_contact_mu2', default_value='0.2',
-                description=(
-                    'husarion_cylinder only: friction across the roller '
-                    'axis.'),
-            ),
-            DeclareLaunchArgument(
-                'wheel_contact_slip1', default_value='0.0',
-                description=(
-                    'husarion_cylinder only: tangential slip compliance.'),
-            ),
-            DeclareLaunchArgument(
-                'front_left_roller_phase', default_value='0.22193969'),
-            DeclareLaunchArgument(
-                'front_right_roller_phase', default_value='0.48030419'),
-            DeclareLaunchArgument(
-                'rear_right_roller_phase', default_value='0.19668582'),
-            DeclareLaunchArgument(
-                'rear_left_roller_phase', default_value='0.24790784'),
             DeclareLaunchArgument('x', default_value='0.0'),
             DeclareLaunchArgument('y', default_value='0.0'),
             DeclareLaunchArgument('z', default_value='0.08'),

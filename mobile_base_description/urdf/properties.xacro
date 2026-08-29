@@ -6,67 +6,14 @@
   <xacro:property name="chassis_height" value="0.050"/>
   <xacro:property name="chassis_mass" value="1.80"/>
 
-  <!-- Measured from the four wheel STL roller envelopes (millimetres on export). -->
+  <!-- Measured from the four wheel STL envelopes (millimetres on export). -->
   <xacro:property name="wheel_radius" value="0.03074443"/>
   <xacro:property name="wheel_width" value="0.03360543"/>
   <xacro:property name="wheel_mass" value="0.12"/>
-  <xacro:property name="roller_count" value="10"/>
-  <xacro:property name="roller_center_radius" value="0.02505"/>
-  <xacro:property name="roller_radius"
-                  value="${wheel_radius - roller_center_radius}"/>
-  <xacro:property name="roller_length" value="0.02580"/>
-  <xacro:property name="roller_inclination" value="${pi / 4.0}"/>
-  <xacro:property name="roller_mass" value="${wheel_mass * 0.03}"/>
-  <xacro:property name="roller_joint_damping"
-                  value="$(arg roller_joint_damping)"/>
-  <xacro:property name="roller_joint_friction"
-                  value="$(arg roller_joint_friction)"/>
-  <xacro:property name="roller_collision_model"
-                  value="$(arg roller_collision_model)"/>
-
-  <!--
-    husarion_cylinder emits no roller links at all, so the hub must carry the
-    whole wheel mass. The explicit-roller models leave the roller ring holding
-    its share. Total wheel mass is 0.12 kg either way.
-  -->
-  <xacro:property name="explicit_rollers"
-                  value="${roller_collision_model != 'husarion_cylinder'}"/>
-  <xacro:property name="wheel_hub_mass"
-                  value="${wheel_mass - roller_count * roller_mass
-                           if explicit_rollers else wheel_mass}"/>
-
-  <!--
-    Anisotropic wheel contact, used only by husarion_cylinder. A mecanum roller
-    rolls across its own axis and grips along it, so mu acts along fdir1 (the
-    roller axis) and mu2 across it. Values follow the shipping Husarion ROSbot
-    XL configuration; slip1 supplies the tangential compliance without which
-    the single-cylinder contact oscillates instead of translating.
-  -->
-  <!--
-    Driven-joint resistance. With explicit rollers the roller ring carries the
-    sliding and these values are part of the existing calibration, so they are
-    left alone. husarion_cylinder has no rollers, so every bit of joint
-    resistance runs through the wheel joint; the shipping ROSbot XL uses
-    0.001/0.001 there, against 0.05/0.01 here, and the heavier damping shows up
-    as wheel-tracking error.
-  -->
-  <xacro:property name="wheel_joint_damping"
-                  value="${0.05 if explicit_rollers else 0.001}"/>
-  <xacro:property name="wheel_joint_friction"
-                  value="${0.01 if explicit_rollers else 0.001}"/>
-
-  <xacro:property name="wheel_contact_mu" value="$(arg wheel_contact_mu)"/>
-  <xacro:property name="wheel_contact_mu2" value="$(arg wheel_contact_mu2)"/>
-  <xacro:property name="wheel_contact_slip1" value="$(arg wheel_contact_slip1)"/>
-  <xacro:property name="wheel_contact_slip2" value="$(arg wheel_contact_slip2)"/>
-  <!--
-    Contact friction and stiffness (mu, mu2, kp, kd) are intentionally absent
-    here. They cannot be expressed in a URDF that survives gz sdf -p, so they
-    are applied by mobile_base_bringup/scripts/generate_sim_sdf.py when the
-    simulation SDF is produced. The roller_contact_mu xacro argument is still
-    accepted so callers can pass it uniformly, but it shapes the generated
-    SDF rather than this description.
-  -->
+  <!-- Preserve the inertial radius used by the validated canonical model. -->
+  <xacro:property name="wheel_inertial_radius" value="0.02505"/>
+  <xacro:property name="wheel_joint_damping" value="0.001"/>
+  <xacro:property name="wheel_joint_friction" value="0.001"/>
 
   <!-- wheelbase is front-to-rear wheel-center spacing; wheel_separation is track width. -->
   <xacro:property name="wheelbase" value="0.150"/>

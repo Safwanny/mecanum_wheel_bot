@@ -119,18 +119,7 @@ class OdometryTestRunner(Node):
             'imu_topic': '/imu/data',
             'wheels_radius': 0.03074443,
             'center_projection_sum': 0.142,
-            'roller_joint_damping': 0.0,
-            'roller_joint_friction': 0.0,
-            'roller_contact_mu': 1.0,
-            'roller_collision_model': 'barrel',
-            'wheel_contact_mu': 0.8,
-            'wheel_contact_mu2': 0.2,
-            'wheel_contact_slip1': 0.0,
             'physics_max_step_size': 0.001,
-            'front_left_roller_phase': 0.22193969,
-            'front_right_roller_phase': 0.48030419,
-            'rear_right_roller_phase': 0.19668582,
-            'rear_left_roller_phase': 0.24790784,
             'command_frame': 'base_link',
             'calibration_baseline_commit': (
                 'e7158321d0e056b07feb5354547fdcb00b59c461'),
@@ -188,28 +177,8 @@ class OdometryTestRunner(Node):
         self.wheels_radius = self._positive('wheels_radius')
         self.center_projection_sum = self._positive(
             'center_projection_sum')
-        self.roller_joint_damping = self._nonnegative(
-            'roller_joint_damping')
-        self.roller_joint_friction = self._nonnegative(
-            'roller_joint_friction')
-        self.roller_contact_mu = self._positive('roller_contact_mu')
-        # Recorded for provenance; only husarion_cylinder consumes these.
-        self.wheel_contact_mu = self._positive('wheel_contact_mu')
-        self.wheel_contact_mu2 = self._positive('wheel_contact_mu2')
-        self.wheel_contact_slip1 = self._nonnegative('wheel_contact_slip1')
-        self.roller_collision_model = self._string(
-            'roller_collision_model')
-        if self.roller_collision_model not in (
-                'cylinder', 'barrel', 'husarion_cylinder'):
-            raise ValueError(
-                'roller_collision_model must be cylinder, barrel, or '
-                'husarion_cylinder')
         self.physics_max_step_size = self._positive(
             'physics_max_step_size')
-        self.roller_phases = {
-            wheel: self._finite(f'{wheel}_roller_phase')
-            for wheel in (
-                'front_left', 'front_right', 'rear_right', 'rear_left')}
         self.world = self._string('world')
         self.robot_entity = self._string('robot_entity')
         self.command_frame = self._string('command_frame')
@@ -1161,16 +1130,8 @@ class OdometryTestRunner(Node):
                 'wheels_radius': self.wheels_radius,
                 'center_projection_sum': self.center_projection_sum,
             },
-            'roller_configuration': {
-                'joint_damping': self.roller_joint_damping,
-                'joint_friction': self.roller_joint_friction,
-                'contact_mu': self.roller_contact_mu,
-                'collision_model': self.roller_collision_model,
-                'wheel_contact_mu': self.wheel_contact_mu,
-                'wheel_contact_mu2': self.wheel_contact_mu2,
-                'wheel_contact_slip1': self.wheel_contact_slip1,
-                'phases': self.roller_phases,
-            },
+            'contact_implementation': (
+                'anisotropic single-cylinder mecanum wheel contact'),
             'physics_configuration': {
                 'max_step_size': self.physics_max_step_size,
             },
@@ -1421,16 +1382,8 @@ class OdometryTestRunner(Node):
             'profile_order': self.profile_order,
             'random_seed': self.random_seed,
             'actual_execution_order': actual_execution_order,
-            'roller_configuration': {
-                'joint_damping': self.roller_joint_damping,
-                'joint_friction': self.roller_joint_friction,
-                'contact_mu': self.roller_contact_mu,
-                'collision_model': self.roller_collision_model,
-                'wheel_contact_mu': self.wheel_contact_mu,
-                'wheel_contact_mu2': self.wheel_contact_mu2,
-                'wheel_contact_slip1': self.wheel_contact_slip1,
-                'phases': self.roller_phases,
-            },
+            'contact_implementation': (
+                'anisotropic single-cylinder mecanum wheel contact'),
             'physics_configuration': {
                 'max_step_size': self.physics_max_step_size,
             },

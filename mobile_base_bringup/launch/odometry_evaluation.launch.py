@@ -89,26 +89,8 @@ def _evaluation_actions(context):
             'wheels_radius': LaunchConfiguration('wheels_radius'),
             'center_projection_sum': LaunchConfiguration(
                 'center_projection_sum'),
-            'roller_joint_damping': LaunchConfiguration(
-                'roller_joint_damping'),
-            'roller_joint_friction': LaunchConfiguration(
-                'roller_joint_friction'),
-            'roller_contact_mu': LaunchConfiguration('roller_contact_mu'),
-            'roller_collision_model': LaunchConfiguration(
-                'roller_collision_model'),
-            'wheel_contact_mu': LaunchConfiguration('wheel_contact_mu'),
-            'wheel_contact_mu2': LaunchConfiguration('wheel_contact_mu2'),
-            'wheel_contact_slip1': LaunchConfiguration('wheel_contact_slip1'),
             'physics_max_step_size': LaunchConfiguration(
                 'physics_max_step_size'),
-            'front_left_roller_phase': LaunchConfiguration(
-                'front_left_roller_phase'),
-            'front_right_roller_phase': LaunchConfiguration(
-                'front_right_roller_phase'),
-            'rear_right_roller_phase': LaunchConfiguration(
-                'rear_right_roller_phase'),
-            'rear_left_roller_phase': LaunchConfiguration(
-                'rear_left_roller_phase'),
             'world': world,
             'robot_entity': LaunchConfiguration('robot_entity'),
             'ground_truth_topic': ground_truth_topic,
@@ -148,28 +130,10 @@ def generate_launch_description():
             'render_engine': LaunchConfiguration('render_engine'),
             'physics_max_step_size': LaunchConfiguration(
                 'physics_max_step_size'),
-            'roller_joint_damping': LaunchConfiguration(
-                'roller_joint_damping'),
-            'roller_joint_friction': LaunchConfiguration(
-                'roller_joint_friction'),
-            'roller_contact_mu': LaunchConfiguration('roller_contact_mu'),
-            'roller_collision_model': LaunchConfiguration(
-                'roller_collision_model'),
-            'wheel_contact_mu': LaunchConfiguration('wheel_contact_mu'),
-            'wheel_contact_mu2': LaunchConfiguration('wheel_contact_mu2'),
-            'wheel_contact_slip1': LaunchConfiguration('wheel_contact_slip1'),
             # The campaign publishes exact constant twists and measures what
             # the chassis does with them; a ramp in between would change the
             # commanded signal and invalidate every accuracy metric.
             'velocity_smoother': 'false',
-            'front_left_roller_phase': LaunchConfiguration(
-                'front_left_roller_phase'),
-            'front_right_roller_phase': LaunchConfiguration(
-                'front_right_roller_phase'),
-            'rear_right_roller_phase': LaunchConfiguration(
-                'rear_right_roller_phase'),
-            'rear_left_roller_phase': LaunchConfiguration(
-                'rear_left_roller_phase'),
         }.items(),
     )
     default_config = (
@@ -204,23 +168,6 @@ def generate_launch_description():
         DeclareLaunchArgument('render_engine', default_value='ogre'),
         DeclareLaunchArgument(
             'physics_max_step_size', default_value='0.001'),
-        DeclareLaunchArgument('roller_joint_damping', default_value='0.0'),
-        DeclareLaunchArgument(
-            'roller_joint_friction', default_value='0.0'),
-        DeclareLaunchArgument('roller_contact_mu', default_value='1.0'),
-        DeclareLaunchArgument(
-            'roller_collision_model', default_value='barrel'),
-        DeclareLaunchArgument('wheel_contact_mu', default_value='0.8'),
-        DeclareLaunchArgument('wheel_contact_mu2', default_value='0.2'),
-        DeclareLaunchArgument('wheel_contact_slip1', default_value='0.0'),
-        DeclareLaunchArgument(
-            'front_left_roller_phase', default_value='0.22193969'),
-        DeclareLaunchArgument(
-            'front_right_roller_phase', default_value='0.48030419'),
-        DeclareLaunchArgument(
-            'rear_right_roller_phase', default_value='0.19668582'),
-        DeclareLaunchArgument(
-            'rear_left_roller_phase', default_value='0.24790784'),
         DeclareLaunchArgument('shutdown_on_complete', default_value='true'),
         simulation,
         OpaqueFunction(function=_evaluation_actions),

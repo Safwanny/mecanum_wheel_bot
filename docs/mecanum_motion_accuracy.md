@@ -1,4 +1,15 @@
-# Mecanum motion-accuracy calibration
+# Historical mecanum motion-accuracy experiments
+
+> This document preserves measurements from the retired passive-roller
+> architecture and the experiments that led to the current implementation. The
+> active repository now has one contact path: four single-cylinder wheel
+> collisions with direction-dependent friction. Runtime selection and the old
+> experimental tuning interfaces no longer exist.
+>
+> The canonical implementation was subsequently validated manually through
+> simulation, mecanum driving, odometry/EKF, SLAM mapping, map saving, saved-map
+> loading, and AMCL localization. Phase 1 is closed. Autonomous Nav2 goal
+> navigation is not claimed.
 
 ## Scope and immutable baseline
 
@@ -14,8 +25,8 @@ motions had 11--21% ground-truth chassis error. That is diagnostic Case B:
 correct wheel actuation with inaccurate roller/ground contact motion.
 
 Generated campaign data remains ignored under `phase1_results/final_fix/`.
-The retained source changes are the calibrated model, parameterized experiment
-controls, regression tests, and long profiles.
+The measurements below remain useful engineering evidence, but their passive
+roller configuration and comparison controls are no longer active source.
 
 ## Geometry and symmetry audit
 
@@ -55,7 +66,7 @@ Zero damping plus zero joint friction with the old cylinders improved focused
 mean error to 13.40%, but did not solve Case B. The accepted primitive barrel
 reduced it to 2.59%, with all four focused primitives below 3.78%.
 
-## Final physical model
+## Historical passive-roller model
 
 The final model retains 40 explicit passive roller links and continuous joints.
 Each roller uses nine overlapping sphere collisions along its local axis to
@@ -84,10 +95,9 @@ visuals, and physical mecanum mechanism.
 | Wheel phases and axial offsets | measured wheel-specific values | unchanged |
 | Controller wheel radius / projection sum | `0.03074443 / 0.142 m` | unchanged |
 
-Launch and generation tools expose the calibration values so rejected
-candidates can be reproduced without source edits. Defaults select the final
-configuration. Static tests lock the exact barrel stations and radii and also
-verify that `roller_collision_model:=cylinder` remains a valid comparison mode.
+At the time of this campaign, launch and generation tools exposed calibration
+values for reproducing rejected candidates. Those controls and the comparison
+geometry have since been retired.
 
 ## Ground-truth results
 
@@ -243,7 +253,7 @@ draw and reports it deterministically. Treat the strafe yaw as a roller-phase
 artifact of a single configuration, not as a contact defect, and do not retune
 friction, damping, or physics step trying to remove it.
 
-## Rejected: anisotropic cylinder wheel model
+## Early rejected attempt: anisotropic cylinder wheel contact
 
 A single cylinder per wheel with a handed `fdir1` friction cone at 45 degrees
 was implemented as an opt-in fourth of the contact cost (4 contacts instead of
@@ -258,9 +268,13 @@ between `+0.031` and `-0.028 m`. That is contact instability rather than a
 tuning offset, so no `mu`/`mu2` sweep was pursued and the change was reverted
 rather than shipped in a non-working state.
 
-The `fdir1` prohibition in `_validate_explicit_rollers` therefore remains
-absolute: an explicit-roller model must produce the mecanum effect through real
-roller geometry and contact.
+This result was later traced to contact-delivery details rather than a failure of
+the approximation itself. The working implementation injects the surface after
+URDF-to-SDF conversion, writes the literal `gz:expressed_in` attribute expected
+by DART, and references the surviving `base_footprint` SDF link. With the
+validated handed direction mapping, that implementation became the canonical
+contact path. The failed attempt remains documented here to show why those
+seemingly small generation details are mandatory.
 
 ## Validation commands
 

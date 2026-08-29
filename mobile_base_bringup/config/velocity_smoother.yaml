@@ -19,9 +19,8 @@ velocity_smoother:
     # The stock Jazzy mecanum_drive_controller exposes no velocity or
     # acceleration parameters at all -- its whole parameter set is joint names,
     # kinematics, covariances, TF settings and reference_timeout -- so a
-    # dropped command is a step change straight to zero. Husarion maintain a
-    # forked controller purely to add these limits; this achieves the same
-    # without a fork.
+    # dropped command is a step change straight to zero. The smoother adds
+    # these limits without requiring a controller fork.
     smoothing_frequency: 20.0
     scale_velocities: false
 
@@ -35,8 +34,8 @@ velocity_smoother:
     max_velocity: [0.5, 0.5, 2.0]
     min_velocity: [-0.5, -0.5, -2.0]
 
-    # Deceleration is deliberately stronger than acceleration, following the
-    # same asymmetry Husarion use. Stopping short is the point of this node.
+    # Deceleration is deliberately stronger than acceleration so stopping is
+    # prioritized over ramp-up.
     max_accel: [1.0, 1.0, 3.0]
     max_decel: [-1.5, -1.5, -4.0]
 
