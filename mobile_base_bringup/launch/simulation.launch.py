@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -160,8 +161,30 @@ def _resolve_world(context, worlds_directory):
     render_engine = LaunchConfiguration('render_engine').perform(context)
     if render_engine not in ('ogre', 'ogre2'):
         raise RuntimeError("render_engine must be 'ogre' or 'ogre2'")
+    max_step_text = LaunchConfiguration(
+        'physics_max_step_size').perform(context)
+    try:
+        max_step_size = float(max_step_text)
+    except ValueError as error:
+        raise RuntimeError(
+            'physics_max_step_size must be a positive finite number'
+        ) from error
+    if not math.isfinite(max_step_size) or max_step_size <= 0.0:
+        raise RuntimeError(
+            'physics_max_step_size must be a positive finite number')
+
+    tree = ET.parse(resolved)
+    physics = tree.findall('./world/physics')
+    if len(physics) != 1:
+        raise RuntimeError(
+            f'Expected one physics element in {resolved}, found '
+            f'{len(physics)}')
+    max_step = physics[0].find('max_step_size')
+    if max_step is None:
+        max_step = ET.SubElement(physics[0], 'max_step_size')
+    max_step.text = max_step_text
+
     if render_engine != 'ogre2':
-        tree = ET.parse(resolved)
         sensors_plugins = [
             plugin for plugin in tree.findall('.//plugin')
             if plugin.attrib.get('name') == 'gz::sim::systems::Sensors'
@@ -175,11 +198,11 @@ def _resolve_world(context, worlds_directory):
         if engine is None:
             engine = ET.SubElement(sensors_plugins[0], 'render_engine')
         engine.text = render_engine
-        generated = Path(
-            f'/tmp/mobile_base_world_{os.getpid()}_{render_engine}.sdf'
-        )
-        tree.write(generated, encoding='utf-8', xml_declaration=True)
-        resolved = generated
+    generated = Path(
+        f'/tmp/mobile_base_world_{os.getpid()}_{render_engine}.sdf'
+    )
+    tree.write(generated, encoding='utf-8', xml_declaration=True)
+    resolved = generated
     context.launch_configurations['resolved_world'] = str(resolved.resolve())
     return []
 
@@ -349,6 +372,39 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('localization')),
         output='screen',
     )
+    velocity_smoother = Node(
+        package='nav2_velocity_smoother',
+        executable='velocity_smoother',
+        name='velocity_smoother',
+        parameters=[
+            PathJoinSubstitution(
+                [bringup_share, 'config', 'velocity_smoother.yaml']),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+        ],
+        # Keeps the single-arbiter rule: the smoother is the only publisher on
+        # the controller's reference topic, and command sources feed it.
+        remappings=[
+            ('cmd_vel', '/mobile_base/cmd_vel'),
+            ('cmd_vel_smoothed', '/mobile_base_controller/reference'),
+        ],
+        condition=IfCondition(LaunchConfiguration('velocity_smoother')),
+        output='screen',
+    )
+    # nav2_velocity_smoother is a lifecycle node and stays unconfigured
+    # without something to drive its transitions.
+    velocity_smoother_manager = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_velocity_smoother',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'autostart': True,
+            'node_names': ['velocity_smoother'],
+            'bond_timeout': 4.0,
+        }],
+        condition=IfCondition(LaunchConfiguration('velocity_smoother')),
+        output='screen',
+    )
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
@@ -396,6 +452,8 @@ def generate_launch_description():
                 localization,
                 raw_trajectory,
                 filtered_trajectory,
+                velocity_smoother,
+                velocity_smoother_manager,
                 rviz,
             ]
         return [
@@ -435,12 +493,30 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument(
+                'physics_max_step_size',
+                default_value='0.001',
+                description='Gazebo physics integration step in seconds.',
+            ),
+            DeclareLaunchArgument(
                 'localization',
                 default_value='true',
                 description=(
                     'Run robot_localization and give it sole ownership of '
                     'odom to base_footprint TF.'
                 ),
+            ),
+            DeclareLaunchArgument(
+                'velocity_smoother', default_value='false',
+                description=(
+                    'Ramp commands through nav2_velocity_smoother instead of '
+                    'stepping them. Drive via /mobile_base/cmd_vel when on. '
+                    'OFF by default pending the open question in '
+                    'config/velocity_smoother.yaml: the smoother was observed '
+                    'republishing the last command for ~9.5 s after input '
+                    'stopped, which would keep the controller from ever '
+                    'timing out. Must also stay false for odometry '
+                    'evaluation, whose profiles depend on exact constant '
+                    'twists reaching the controller.'),
             ),
             DeclareLaunchArgument(
                 'start_controller',

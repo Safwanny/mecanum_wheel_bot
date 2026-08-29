@@ -89,8 +89,8 @@ def main():
     ):
         assert required in link_names
     assert WHEEL_JOINTS <= joint_names
-    assert len([name for name in link_names if '_roller_' in name]) == 40
-    assert len([name for name in joint_names if '_roller_' in name]) == 40
+    assert not [name for name in link_names if '_roller_' in name]
+    assert not [name for name in joint_names if '_roller_' in name]
 
     assert_fixed_child(joints, 'lidar_link', 'base_link')
     assert_fixed_child(joints, 'imu_link', 'base_link')

@@ -42,6 +42,8 @@ def generate_launch_description():
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('render_engine', default_value='ogre2'),
+        DeclareLaunchArgument(
+            'velocity_smoother', default_value='false'),
         # Preserve the wrapper's value before simulation.launch.py receives
         # rviz=false. Include launch arguments share the launch context.
         SetLaunchConfiguration(
@@ -56,6 +58,8 @@ def generate_launch_description():
                 'rviz': 'false',
                 'render_engine': LaunchConfiguration('render_engine'),
                 'localization': 'true',
+                'velocity_smoother': LaunchConfiguration(
+                    'velocity_smoother'),
             }.items(),
         ),
         IncludeLaunchDescription(

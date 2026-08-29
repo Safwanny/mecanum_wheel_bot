@@ -1,6 +1,7 @@
 import json
 import math
 import subprocess
+from types import SimpleNamespace
 
 from mobile_base_tools.evaluation_campaign import (
     completed_repetitions,
@@ -279,6 +280,36 @@ def test_reset_requires_fresh_ground_truth_raw_and_optional_filtered():
         2.0, 1.0, 2.0, 1.0, 1.0, 1.0, require_filtered=True)
     assert post_reset_streams_fresh(
         2.0, 1.0, 2.0, 1.0, 2.0, 1.0, require_filtered=True)
+
+
+def test_commanded_motion_rate_uses_angular_rate_for_pure_rotation():
+    runner = OdometryTestRunner.__new__(OdometryTestRunner)
+    runner.ground_truth_speed = 0.0
+    runner.raw_odometry_speed = 0.0
+    runner.ground_truth_velocity = {'angular_z': -0.08}
+    runner.latest_odometry_message = SimpleNamespace(
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(
+                angular=SimpleNamespace(z=-0.09))))
+
+    rate = runner._commanded_motion_rate(Command(0.0, 0.0, -0.1))
+
+    assert rate == pytest.approx(0.09)
+
+
+def test_commanded_motion_rate_uses_linear_rate_for_translation():
+    runner = OdometryTestRunner.__new__(OdometryTestRunner)
+    runner.ground_truth_speed = 0.03
+    runner.raw_odometry_speed = 0.04
+    runner.ground_truth_velocity = {'angular_z': 1.0}
+    runner.latest_odometry_message = SimpleNamespace(
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(
+                angular=SimpleNamespace(z=1.0))))
+
+    rate = runner._commanded_motion_rate(Command(0.1, 0.0, 0.0))
+
+    assert rate == pytest.approx(0.04)
 
 
 def test_execute_run_preserves_samples_after_segment_failure(monkeypatch):

@@ -12,9 +12,32 @@ CONFIG = (
 
 def test_required_profiles_are_valid():
     profiles = load_profiles(CONFIG)
-    assert set(profiles) == REQUIRED_PROFILES
+    assert REQUIRED_PROFILES <= set(profiles)
+    assert {
+        'diagnostic_low_forward', 'diagnostic_low_backward',
+        'diagnostic_low_left', 'diagnostic_low_right',
+        'diagnostic_low_rotate_positive',
+        'diagnostic_low_rotate_negative',
+        'diagnostic_low_forward_left',
+        'diagnostic_low_forward_right',
+        'diagnostic_low_backward_left',
+        'diagnostic_low_backward_right',
+    } <= set(profiles)
     assert len(profiles['square_1m'].segments) == 4
-    assert all(profile.repetitions == 5 for profile in profiles.values())
+    assert {
+        'long_forward_5m', 'long_strafe_left_5m',
+        'long_diagonal_forward_right_5m',
+    } <= set(profiles)
+    assert all(
+        profiles[name].segments[0].target == 5.0
+        for name in profiles if name.startswith('long_')
+    )
+    assert all(profiles[name].repetitions == 5 for name in REQUIRED_PROFILES)
+    assert all(
+        profile.repetitions == 1
+        for name, profile in profiles.items()
+        if name.startswith('diagnostic_low_')
+    )
     for profile in profiles.values():
         assert profile.settle_before > 0.0
         assert profile.settle_after > 0.0

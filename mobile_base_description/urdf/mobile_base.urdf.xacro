@@ -8,7 +8,6 @@
   <xacro:include filename="inertials.xacro"/>
   <xacro:include filename="properties.xacro"/>
   <xacro:include filename="chassis.xacro"/>
-  <xacro:include filename="macros/mecanum_rollers.xacro"/>
   <xacro:include filename="macros/mecanum_wheels.xacro"/>
   <xacro:include filename="base.xacro"/>
   <xacro:include filename="camera.xacro"/>

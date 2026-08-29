@@ -54,6 +54,8 @@ def main():
     assert 'enable_odom_tf:=false' in launch
     assert 'enable_odom_tf:=true' in launch
     assert 'mobile_base_localization' in launch
+    assert "'physics_max_step_size'" in launch
+    assert 'max_step.text = max_step_text' in launch
     assert "DeclareLaunchArgument('namespace'" not in launch
     assert 'PushRosNamespace' not in launch
 
@@ -67,6 +69,7 @@ def main():
     assert "executable='odometry_test_runner'" in evaluation_launch
     assert "default_value='empty'" in evaluation_launch
     assert "default_value='false'" in evaluation_launch
+    assert "'physics_max_step_size'" in evaluation_launch
     assert "'/tf'" not in evaluation_launch
 
     package = ET.parse(bringup / 'package.xml').getroot()

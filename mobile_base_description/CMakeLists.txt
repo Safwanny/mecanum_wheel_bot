@@ -25,10 +25,10 @@ if(BUILD_TESTING)
   )
 
   add_test(
-    NAME verify_explicit_mecanum_rollers
+    NAME verify_mecanum_wheels
     COMMAND
       ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_explicit_mecanum_rollers.py
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_mecanum_wheels.py
       ${CMAKE_CURRENT_SOURCE_DIR}/urdf/mobile_base.urdf.xacro
   )
 

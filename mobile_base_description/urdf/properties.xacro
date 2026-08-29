@@ -6,24 +6,14 @@
   <xacro:property name="chassis_height" value="0.050"/>
   <xacro:property name="chassis_mass" value="1.80"/>
 
-  <!-- Measured from the four wheel STL roller envelopes (millimetres on export). -->
+  <!-- Measured from the four wheel STL envelopes (millimetres on export). -->
   <xacro:property name="wheel_radius" value="0.03074443"/>
   <xacro:property name="wheel_width" value="0.03360543"/>
   <xacro:property name="wheel_mass" value="0.12"/>
-  <xacro:property name="roller_count" value="10"/>
-  <xacro:property name="roller_center_radius" value="0.02505"/>
-  <xacro:property name="roller_radius"
-                  value="${wheel_radius - roller_center_radius}"/>
-  <xacro:property name="roller_length" value="0.02580"/>
-  <xacro:property name="roller_inclination" value="${pi / 4.0}"/>
-  <xacro:property name="roller_mass" value="${wheel_mass * 0.03}"/>
-  <xacro:property name="wheel_hub_mass"
-                  value="${wheel_mass - roller_count * roller_mass}"/>
-  <xacro:property name="roller_joint_damping" value="0.001"/>
-  <xacro:property name="roller_joint_friction" value="0.00005"/>
-  <xacro:property name="roller_contact_mu" value="0.8"/>
-  <xacro:property name="roller_contact_kp" value="100000.0"/>
-  <xacro:property name="roller_contact_kd" value="10.0"/>
+  <!-- Preserve the inertial radius used by the validated canonical model. -->
+  <xacro:property name="wheel_inertial_radius" value="0.02505"/>
+  <xacro:property name="wheel_joint_damping" value="0.001"/>
+  <xacro:property name="wheel_joint_friction" value="0.001"/>
 
   <!-- wheelbase is front-to-rear wheel-center spacing; wheel_separation is track width. -->
   <xacro:property name="wheelbase" value="0.150"/>

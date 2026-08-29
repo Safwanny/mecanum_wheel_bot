@@ -23,26 +23,10 @@
         </joint>
       </xacro:macro>
 
-      <xacro:macro name="roller_state_interfaces"
-                   params="wheel_name index:=0">
-        <xacro:if value="${index &lt; roller_count}">
-          <joint name="${prefix}${wheel_name}_roller_${index}_joint">
-            <state_interface name="position"/>
-            <state_interface name="velocity"/>
-          </joint>
-          <xacro:roller_state_interfaces wheel_name="${wheel_name}"
-                                         index="${index + 1}"/>
-        </xacro:if>
-      </xacro:macro>
-
       <xacro:wheel_interface joint_name="front_left_wheel_joint"/>
       <xacro:wheel_interface joint_name="front_right_wheel_joint"/>
       <xacro:wheel_interface joint_name="rear_right_wheel_joint"/>
       <xacro:wheel_interface joint_name="rear_left_wheel_joint"/>
-      <xacro:roller_state_interfaces wheel_name="front_left"/>
-      <xacro:roller_state_interfaces wheel_name="front_right"/>
-      <xacro:roller_state_interfaces wheel_name="rear_right"/>
-      <xacro:roller_state_interfaces wheel_name="rear_left"/>
     </ros2_control>
   </xacro:macro>
 </robot>

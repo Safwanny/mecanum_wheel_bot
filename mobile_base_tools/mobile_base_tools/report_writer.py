@@ -82,6 +82,12 @@ def build_report(metadata, configuration, runs):
         key=lambda item: item['mean_position_error'],
         reverse=True,
     )
+    classifications = {}
+    for run in runs:
+        root_cause = run.get('mecanum_diagnostics', {}).get('root_cause', {})
+        case = root_cause.get('case')
+        if case:
+            classifications[case] = classifications.get(case, 0) + 1
     return {
         'timestamp': datetime.now(timezone.utc).isoformat(),
         **metadata,
@@ -89,6 +95,7 @@ def build_report(metadata, configuration, runs):
         'runs': runs,
         'per_test_statistics': summaries,
         'largest_position_errors': ranking,
+        'mecanum_root_cause_summary': classifications,
     }
 
 
@@ -111,6 +118,28 @@ def write_trajectory(path, samples):
         'filtered_odometry_stamp',
         'wall_elapsed', 'simulation_elapsed', 'real_time_factor',
         'ground_truth_speed', 'raw_odometry_speed',
+        'ground_truth_linear_x', 'ground_truth_linear_y',
+        'ground_truth_angular_z',
+        'raw_odometry_linear_x', 'raw_odometry_linear_y',
+        'raw_odometry_angular_z',
+        'filtered_odometry_linear_x', 'filtered_odometry_linear_y',
+        'filtered_odometry_angular_z', 'imu_angular_velocity_z',
+        'controller_reference_linear_x', 'controller_reference_linear_y',
+        'controller_reference_angular_z',
+        'expected_front_left_wheel_velocity',
+        'expected_front_right_wheel_velocity',
+        'expected_rear_right_wheel_velocity',
+        'expected_rear_left_wheel_velocity',
+        'actual_front_left_wheel_velocity',
+        'actual_front_right_wheel_velocity',
+        'actual_rear_right_wheel_velocity',
+        'actual_rear_left_wheel_velocity',
+        'controller_front_left_wheel_velocity',
+        'controller_front_right_wheel_velocity',
+        'controller_rear_right_wheel_velocity',
+        'controller_rear_left_wheel_velocity',
+        'front_left_wheel_position', 'front_right_wheel_position',
+        'rear_right_wheel_position', 'rear_left_wheel_position',
     )
     _write_csv(Path(path), samples, fields)
 

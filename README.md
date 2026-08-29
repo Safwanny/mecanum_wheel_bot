@@ -15,11 +15,11 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 
 The packages are independent of the existing arm stack.
 
-## Phase 1 status
+## Project status
 
-**Status: Phase 1 complete.** The mobile-base software baseline is established
-and ready for Phase 2. Phase 1 delivered the mecanum simulation and control
-stack, raw wheel odometry, fused wheel/IMU odometry, explicit TF ownership,
+**Status: Phase 1 is closed and the Phase 2 mapping/localization stack is implemented.**
+Phase 1 delivered the mecanum simulation and control stack, raw wheel odometry,
+fused wheel/IMU odometry, explicit TF ownership,
 timestamp and TF contract validation, repeatable motion evaluation, and an
 isolated per-repetition campaign lifecycle with bounded cleanup and resumable,
 non-overwriting results.
@@ -35,8 +35,14 @@ The completed raw and fused campaigns support these engineering conclusions:
 - no controller, EKF, geometry, trajectory, sensor-rate, or evaluation-threshold
   tuning was required to close Phase 1.
 
-Phase 2 builds on this fixed baseline with SLAM Toolbox mapping and saved-map
-localization. Full Nav2 planning and autonomous navigation remain later work.
+The canonical single-cylinder, direction-dependent wheel contact implementation
+has been manually validated through simulation startup, controller operation,
+mecanum motion, odometry/EKF, SLAM mapping, occupancy-map save, saved-map loading,
+and AMCL localization. Phase 2 adds SLAM Toolbox mapping and saved-map AMCL
+localization. Earlier diagnostic campaigns and retired contact experiments are
+recorded in
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Full Nav2
+planning and autonomous navigation remain later work.
 
 ## Phase 2: mapping and saved-map localization
 
@@ -195,7 +201,7 @@ mkdir -p "$HOME/ros2_ws/maps/mobile_base"
 
 ros2 run nav2_map_server map_saver_cli \
   -t /map \
-  -f "$HOME/ros2_ws/maps/mobile_base/navigation_basic" \
+  -f "$HOME/ros2_ws/src/mobile_base/maps/mobile_base/navigation_basic" \
   --ros-args \
   -p map_subscribe_transient_local:=true \
   -p save_map_timeout:=10.0
@@ -419,8 +425,8 @@ arbitration, velocity smoothing, or any other autonomous-navigation component.
 URDF and controller values use SI units: metres, kilograms, seconds, and radians.
 The original CAD file remains at `src/3D_Builds/ROS2_transfer.stl` and is not loaded
 at runtime. The base model uses one parametric body link. The mecanum wheels use four
-position-specific STL files for visual appearance and primitive cylinders on the
-passive roller links for collision.
+position-specific STL files for visual appearance and one cylinder collision per
+driven wheel for contact.
 
 The wheel meshes live in `src/mobile_base/meshes/wheels/` and are installed through
 the description package. Gazebo receives runtime-generated `file://` mesh URIs from
@@ -432,8 +438,8 @@ transform flips the exported mounting face inward toward the chassis and keeps t
 mesh axle centre coincident with the driven-wheel link origin. The flip is composed
 about a mesh-local transverse axis aligned with that wheel's measured roller phase;
 this preserves the visual roller phase set and mecanum X-pattern. These visual
-transforms are independent of physical roller handedness, joints, collisions,
-controller configuration, and odometry.
+transforms are independent of collision geometry, controller configuration, and
+odometry.
 
 ## URDF organization
 
@@ -448,8 +454,7 @@ Gazebo plugin/sensor instantiation.
 | `materials.xacro` | Named visual materials |
 | `inertials.xacro` | Reusable inertial macros |
 | `chassis.xacro` | `base_footprint`, `base_link`, and body geometry |
-| `macros/mecanum_rollers.xacro` | Recursive physical roller links, passive joints, collisions, and contact parameters |
-| `macros/mecanum_wheels.xacro` | Driven hub links, existing wheel visuals, wheel joints, and roller-ring invocation |
+| `macros/mecanum_wheels.xacro` | Driven wheel links, visual meshes, cylinder collisions, inertials, and joints |
 | `base.xacro` | Chassis plus four mecanum wheel assembly |
 | `camera.xacro` | Front RGB camera link, optical frame, fixed joints, geometry, and inertia |
 | `lidar.xacro` / `imu.xacro` | Fixed physical sensor links, joints, geometry, and inertia |
@@ -468,21 +473,17 @@ odom
 `-- base_footprint
     `-- base_link
     |-- front_left_wheel_link
-    |   `-- front_left_roller_0_link ... front_left_roller_9_link
     |-- front_right_wheel_link
-    |   `-- front_right_roller_0_link ... front_right_roller_9_link
     |-- rear_right_wheel_link
-    |   `-- rear_right_roller_0_link ... rear_right_roller_9_link
     |-- rear_left_wheel_link
-    |   `-- rear_left_roller_0_link ... rear_left_roller_9_link
     |-- lidar_link
     |-- imu_link
     `-- camera_link
         `-- camera_optical_frame
 ```
 
-Each wheel link owns its internal roller links through the wheel macro. The top-level
-assembly intentionally does not expose those roller links.
+The wheel meshes retain visible mecanum rollers, but the simulation creates no
+passive roller links or joints.
 
 ## Dependencies
 
@@ -520,70 +521,49 @@ ros2 launch mobile_base_bringup simulation.launch.py
 
 `world` accepts an installed world name (with or without `.sdf`) or an absolute
 SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
-`start_controller`, `localization`, `render_engine`, `x`, `y`, `z`, and `yaw`.
+`start_controller`, `localization`, `render_engine`, `velocity_smoother`,
+`physics_max_step_size`, `x`, `y`, `z`, and `yaw`. Mecanum contact is canonical
+and has no runtime model selector or contact-tuning launch arguments.
 Phase 1 intentionally supports one un-namespaced robot. A misleading partial
 `namespace` argument was removed rather than implying multi-robot support.
 
-Wheel appearance comes from the full position-specific mecanum wheel meshes. Gazebo
-motion is physical: the controller drives four wheel joints, each wheel carries ten
-continuous passive roller joints, and the 40 primitive roller collisions contact the
-ground. The driven hub links intentionally have no collision geometry, so wheel-ground
-contact cannot bypass the rollers.
+Wheel appearance comes from the full position-specific mecanum wheel meshes. How
+wheel-ground contact is simulated depends on the selected contact model, below.
 
-## Explicit passive roller model
+## Mecanum wheel contact
 
-Each visual wheel mesh contains ten measured rollers. The physical model matches that
-geometry with a `0.02505 m` roller-centre radius, `0.00569443 m` roller radius,
-`0.02580 m` roller length, 36-degree spacing, and 45-degree roller inclination. The
-effective contact radius remains the controller wheel radius:
+Gazebo models each driven wheel with one cylinder collision. After Xacro is
+converted with `gz sdf -p`, `generate_sim_sdf.py` injects the canonical
+anisotropic surface into each of the four collisions:
 
-```text
-0.02505 + 0.00569443 = 0.03074443 m
-```
+- `mu=0.8` along the handed `fdir1` direction;
+- `mu2=0.2` across that direction;
+- zero `slip1` and `slip2`; and
+- `fdir1` expressed in `base_footprint`, so it does not rotate with the wheel.
 
-The measured position-specific roller configuration is:
+The direction signs form the mecanum X pattern: front-left and rear-right use
+`1 -1 0`; front-right and rear-left use `1 1 0`. The generator validates
+all four wheel links, joints, cylinder dimensions, surfaces, and direction
+frames before writing the SDF. It also rejects passive roller bodies.
 
-| Wheel | Handedness | Zero-angle phase (rad) | Local wheel-Y offset (m) |
-| --- | ---: | ---: | ---: |
-| front-left | -1 | 0.22193969 | -0.00059729 |
-| front-right | +1 | 0.48030419 | +0.00059729 |
-| rear-right | -1 | 0.19668582 | +0.00059729 |
-| rear-left | +1 | 0.24790784 | -0.00059729 |
+This single-cylinder approximation preserves the visual wheel meshes and normal
+controller interfaces while reducing wheel contact topology to four collisions.
+There is no runtime contact-model selector. The validated constants are internal
+to the generator rather than public launch arguments.
 
-For roller angle `theta`, the wheel axle is `a=(0,1,0)` and the increasing-angle
-tangent is `t=(-sin(theta),0,cos(theta))`. The roller axis is
-`cos(pi/4)*a + handedness*sin(pi/4)*t`. The roller child frame maps local Z onto this
-axis, allowing every passive joint to use a normalized local `axis="0 0 1"` while its
-cylinder collision and inertia use the same frame.
-
-The original `0.12 kg` wheel assembly mass is preserved rather than duplicated:
-the collision-free driven hub is `0.084 kg`, and each of its ten rollers is
-`0.0036 kg`. Passive joint damping is `0.001` and friction is `0.00005`. Each roller
-uses isotropic contact friction `mu1=mu2=0.8`, contact stiffness `100000`, and contact
-damping `10`. There is no wheel-level `fdir1` or anisotropic contact approximation.
-
-Only the four driven wheel joints have velocity command interfaces. All 44 movable
-joints—the four wheels and 40 rollers—have position and velocity state interfaces.
-Inspect them while the simulation is running:
+Standard workflows are therefore:
 
 ```bash
-ros2 control list_hardware_interfaces
-ros2 topic echo /joint_states --once
-ros2 topic echo /joint_states --field name --once
+ros2 launch mobile_base_bringup simulation.launch.py
+ros2 launch mobile_base_bringup mapping.launch.py world:=navigation_basic
+ros2 launch mobile_base_bringup localization.launch.py \
+  world:=navigation_basic \
+  map:=/home/safwan/ros2_ws/src/mobile_base/maps/navigation_basic.yaml
 ```
 
-The STL wheel remains one visual attached to the hub link. Consequently, its rendered
-rollers do not visibly spin independently even though the 40 collision-only roller
-links rotate and report state. The corrected inner/outer visual face orientation does
-not change those physical contacts. The explicit model adds 40 links, 40 joints, 40
-collision bodies, and 80 state interfaces; primitive cylinders keep its simulation
-cost bounded, but it is still more CPU-intensive than a one-body contact
-approximation.
-
-The recursive roller organization was informed by
-[`DaiGuard/fuji_mecanum`](https://github.com/DaiGuard/fuji_mecanum), an MIT-licensed
-structural reference. Its ROS 1 controller, Python 2 node, transmissions, meshes,
-dimensions, and Gazebo Classic configuration were not ported.
+The visual roller geometry remains useful for appearance and for interpreting
+the friction direction, but it does not create links, joints, collisions, or
+additional ros2_control state interfaces.
 
 The simulation launch already starts its own robot-state publisher and RViz. Do not
 run `display.launch.py` at the same time, because duplicate description and TF
@@ -925,6 +905,63 @@ The report labels filtered position performance as better, similar, or worse.
 Gazebo model pose is evaluation-only. Never use it as robot odometry or as
 input to localization, sensor fusion, SLAM, navigation, or TF publication.
 
+## Measurement-only mecanum motion diagnostics
+
+The odometry evaluator also records the complete drivetrain chain without
+changing any physical or controller parameter. The preserved Phase 2 baseline
+for this campaign is commit
+`e514a54de05430699203a05f46d845adb576021f`.
+
+Each trajectory CSV records the requested body twist, the body reference
+accepted by `mecanum_drive_controller`, expected FL/FR/RR/RL wheel rates,
+controller-reported and `/joint_states` wheel rates, wheel positions, raw and
+filtered odometry twist, IMU yaw rate, pose-derived Gazebo body velocity, and
+simulation timestamps. Per-run JSON adds wheel RMSE, steady-state error, peak
+error, rise time, overshoot, settling time, ideal-versus-Gazebo chassis
+metrics, odometry-versus-Gazebo metrics, and the evidence classification.
+Gazebo data remains evaluation-only and is never connected to control, EKF,
+SLAM, AMCL, navigation, or TF.
+
+First run all ten short, low-speed primitives from isolated fresh simulations:
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 run mobile_base_tools evaluation_campaign \
+  --profiles diagnostic_low_forward,diagnostic_low_backward,diagnostic_low_left,diagnostic_low_right,diagnostic_low_rotate_positive,diagnostic_low_rotate_negative,diagnostic_low_forward_left,diagnostic_low_forward_right,diagnostic_low_backward_left,diagnostic_low_backward_right \
+  --modes raw_and_filtered --repetitions 1 \
+  --output-dir phase1_results/mecanum_low_speed_baseline
+```
+
+Then run the ten nominal primitives, also with one fresh simulation each:
+
+```bash
+ros2 run mobile_base_tools evaluation_campaign \
+  --profiles forward_1m,backward_1m,strafe_left_1m,strafe_right_1m,rotate_positive_90deg,rotate_negative_90deg,diagonal_forward_left,diagonal_forward_right,diagonal_backward_left,diagonal_backward_right \
+  --modes raw_and_filtered --repetitions 1 \
+  --output-dir phase1_results/mecanum_nominal_baseline
+```
+
+Inspect `campaign_summary.json`, then each isolated repetition's
+`summary.json`, `run_results/*.json`, `trajectories/*.csv`, plots, and
+`launch.log`. Root-cause labels use a documented 10 percent threshold:
+
+- Case A: expected wheel rates and measured wheel rates diverge.
+- Case B: wheel tracking is good but Gazebo chassis motion diverges.
+- Case C: Gazebo chassis motion is good but wheel odometry diverges.
+- Case D: wheel error is concentrated in acceleration/deceleration transients.
+- `within_threshold`: none of those stages exceeds the threshold.
+
+The baseline findings and calibration decision are recorded in
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md).
+
+Acceleration/deceleration behavior remains visible in the time series and the
+rise/overshoot/settling metrics. Do not tune radius, rotational geometry,
+roller/contact parameters, acceleration limits, or physics settings until the
+primitive evidence identifies a dominant case.
+
 Troubleshooting:
 
 - No ground-truth pose: confirm the `empty` world is running and
@@ -998,6 +1035,19 @@ For holonomic movement, hold Shift:
 
 Any unmapped key sends a stop command; `Ctrl-C` exits the teleop node. For hardware,
 keep the same stamped command path but set `use_sim_time:=false`.
+
+`teleop_twist_keyboard` publishes one message per keypress from a blocking read.
+There is no key-release event, so letting go of a key does not stop the robot:
+the last command stands until the controller's `reference_timeout` of `0.5 s`
+expires, which is about `7.5 cm` of further travel at the `0.15 m/s` default.
+Press an unmapped key such as `k` to stop deliberately rather than releasing.
+
+An opt-in `nav2_velocity_smoother` stage exists to ramp commands instead of
+stepping them (`velocity_smoother:=true`, then publish to `/mobile_base/cmd_vel`
+rather than the controller reference). It is **off by default and unverified**:
+acceleration limiting works, but deceleration behaviour on command cessation is an
+open question recorded in `mobile_base_bringup/config/velocity_smoother.yaml`.
+It also does not shorten the `0.5 s` above.
 
 The teleop `frame_id` is `base_link` because the controller command is a body-frame
 twist. Odometry TF is published as `odom -> base_footprint`, while the URDF keeps the

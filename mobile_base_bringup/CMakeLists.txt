@@ -26,6 +26,14 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/../mobile_base_gazebo
   )
 
+  add_test(
+    NAME verify_mecanum_wheel_contact
+    COMMAND
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_mecanum_wheel_contact.py
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
   add_launch_test(
     test/test_sensor_topics.py
     TIMEOUT 150

@@ -86,6 +86,11 @@ def _evaluation_actions(context):
                 'clock_stall_timeout'),
             'motion_start_timeout': LaunchConfiguration(
                 'motion_start_timeout'),
+            'wheels_radius': LaunchConfiguration('wheels_radius'),
+            'center_projection_sum': LaunchConfiguration(
+                'center_projection_sum'),
+            'physics_max_step_size': LaunchConfiguration(
+                'physics_max_step_size'),
             'world': world,
             'robot_entity': LaunchConfiguration('robot_entity'),
             'ground_truth_topic': ground_truth_topic,
@@ -123,6 +128,12 @@ def generate_launch_description():
             'use_sim_time': 'true',
             'localization': LaunchConfiguration('localization'),
             'render_engine': LaunchConfiguration('render_engine'),
+            'physics_max_step_size': LaunchConfiguration(
+                'physics_max_step_size'),
+            # The campaign publishes exact constant twists and measures what
+            # the chassis does with them; a ramp in between would change the
+            # commanded signal and invalidate every accuracy metric.
+            'velocity_smoother': 'false',
         }.items(),
     )
     default_config = (
@@ -145,6 +156,8 @@ def generate_launch_description():
         DeclareLaunchArgument('minimum_wall_watchdog', default_value='30.0'),
         DeclareLaunchArgument('clock_stall_timeout', default_value='5.0'),
         DeclareLaunchArgument('motion_start_timeout', default_value='2.0'),
+        DeclareLaunchArgument('wheels_radius', default_value='0.03074443'),
+        DeclareLaunchArgument('center_projection_sum', default_value='0.142'),
         DeclareLaunchArgument(
             'output_dir', default_value='/tmp/mobile_base_phase1'
         ),
@@ -153,6 +166,8 @@ def generate_launch_description():
         DeclareLaunchArgument('gui', default_value='false'),
         DeclareLaunchArgument('rviz', default_value='false'),
         DeclareLaunchArgument('render_engine', default_value='ogre'),
+        DeclareLaunchArgument(
+            'physics_max_step_size', default_value='0.001'),
         DeclareLaunchArgument('shutdown_on_complete', default_value='true'),
         simulation,
         OpaqueFunction(function=_evaluation_actions),
