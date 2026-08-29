@@ -96,6 +96,9 @@ def _evaluation_actions(context):
             'roller_contact_mu': LaunchConfiguration('roller_contact_mu'),
             'roller_collision_model': LaunchConfiguration(
                 'roller_collision_model'),
+            'wheel_contact_mu': LaunchConfiguration('wheel_contact_mu'),
+            'wheel_contact_mu2': LaunchConfiguration('wheel_contact_mu2'),
+            'wheel_contact_slip1': LaunchConfiguration('wheel_contact_slip1'),
             'physics_max_step_size': LaunchConfiguration(
                 'physics_max_step_size'),
             'front_left_roller_phase': LaunchConfiguration(
@@ -152,6 +155,9 @@ def generate_launch_description():
             'roller_contact_mu': LaunchConfiguration('roller_contact_mu'),
             'roller_collision_model': LaunchConfiguration(
                 'roller_collision_model'),
+            'wheel_contact_mu': LaunchConfiguration('wheel_contact_mu'),
+            'wheel_contact_mu2': LaunchConfiguration('wheel_contact_mu2'),
+            'wheel_contact_slip1': LaunchConfiguration('wheel_contact_slip1'),
             'front_left_roller_phase': LaunchConfiguration(
                 'front_left_roller_phase'),
             'front_right_roller_phase': LaunchConfiguration(
@@ -200,6 +206,9 @@ def generate_launch_description():
         DeclareLaunchArgument('roller_contact_mu', default_value='1.0'),
         DeclareLaunchArgument(
             'roller_collision_model', default_value='barrel'),
+        DeclareLaunchArgument('wheel_contact_mu', default_value='0.8'),
+        DeclareLaunchArgument('wheel_contact_mu2', default_value='0.2'),
+        DeclareLaunchArgument('wheel_contact_slip1', default_value='0.0'),
         DeclareLaunchArgument(
             'front_left_roller_phase', default_value='0.22193969'),
         DeclareLaunchArgument(

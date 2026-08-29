@@ -38,6 +38,19 @@ WHEEL_FILES = {
     'mecanum_wheel_RR.stl',
 }
 WHEEL_NAMES = ('front_left', 'front_right', 'rear_right', 'rear_left')
+EXPLICIT_ROLLER_MODELS = ('barrel', 'cylinder')
+GZ_SCHEMA_NS = 'http://gazebosim.org/schema'
+# Frame the wheel friction direction is expressed in. Must be a link that
+# survives URDF-to-SDF conversion; base_link does not.
+FRICTION_FRAME = 'base_footprint'
+# Roller handedness per wheel, kept identical to base.xacro. The X-pattern
+# gives diagonally opposite wheels the same handedness.
+WHEEL_HANDEDNESS = {
+    'front_left': -1.0,
+    'front_right': 1.0,
+    'rear_right': -1.0,
+    'rear_left': 1.0,
+}
 ROLLER_LINK = re.compile(
     r'^(front_left|front_right|rear_right|rear_left)_roller_([0-9]+)_link$'
 )
@@ -129,6 +142,135 @@ def inject_roller_surfaces(root, mu, mu2, kp, kd, torsional_coefficient):
         raise RuntimeError(
             'No roller collisions found to receive a contact surface')
     return injected
+
+
+def inject_wheel_surfaces(root, mu, mu2, slip1, slip2):
+    """Give each driven hub one anisotropic friction cone."""
+    # A mecanum roller rolls across its own axis and grips along it, so
+    # traction is high along the roller axis (fdir1) and low across it.
+    #
+    # fdir1 is otherwise interpreted in the collision frame, which is fixed to
+    # the spinning wheel: the friction direction would rotate with the wheel
+    # and the mecanum effect would smear away. gz:expressed_in pins it to the
+    # chassis instead.
+    #
+    # Two details that make this silently do nothing if got wrong. dartsim
+    # looks the attribute up by its literal name, so it must be written as
+    # "gz:expressed_in" rather than through ElementTree namespace machinery,
+    # which emits "ns0:expressed_in" and never matches. And the frame must be
+    # base_footprint, not base_link: URDF-to-SDF fixed-joint reduction lumps
+    # base_link into base_footprint, leaving base_link as an SDF <frame> that
+    # does not resolve here. base_footprint is a pure translation from
+    # base_link (rpy 0 0 0), so the orientation is identical.
+    mu = _nonnegative_finite(mu, 'mu')
+    mu2 = _nonnegative_finite(mu2, 'mu2')
+    slip1 = _nonnegative_finite(slip1, 'slip1')
+    slip2 = _nonnegative_finite(slip2, 'slip2')
+    if math.isclose(mu, mu2, rel_tol=1e-9):
+        raise RuntimeError(
+            'husarion_cylinder needs mu != mu2; isotropic friction cannot '
+            'produce mecanum motion')
+
+    root.set('xmlns:gz', GZ_SCHEMA_NS)
+    injected = 0
+    for link in root.findall('.//link'):
+        name = link.attrib.get('name', '')
+        wheel = next(
+            (w for w in WHEEL_NAMES if name == f'{w}_wheel_link'), None)
+        if wheel is None:
+            continue
+        handedness = WHEEL_HANDEDNESS[wheel]
+        for collision in link.findall('collision'):
+            for existing in collision.findall('surface'):
+                collision.remove(existing)
+            surface = ET.SubElement(collision, 'surface')
+            friction = ET.SubElement(surface, 'friction')
+            ode = ET.SubElement(friction, 'ode')
+            _subelement_with_text(ode, 'mu', mu)
+            _subelement_with_text(ode, 'mu2', mu2)
+            _subelement_with_text(ode, 'slip1', slip1)
+            _subelement_with_text(ode, 'slip2', slip2)
+            # Mapping taken from the shipping ROSbot XL wheel description,
+            # whose per-wheel fdir is FL "1 -1 0", FR "1 1 0", RL "1 1 0",
+            # RR "1 -1 0" -- exactly "1 {handedness} 0" for this robot's
+            # handedness. Measured under otherwise identical settings, this
+            # mapping gives 0.47% mean diagnostic error against 170% for the
+            # inverted one, so it is not a free choice.
+            fdir1 = _subelement_with_text(
+                ode, 'fdir1', f'1 {handedness:g} 0')
+            fdir1.set('gz:expressed_in', FRICTION_FRAME)
+            injected += 1
+    if injected != 4:
+        raise RuntimeError(
+            f'Expected one collision on each of the four driven hubs; '
+            f'gave surfaces to {injected}')
+    return injected
+
+
+def _write_sdf(root, output):
+    ET.ElementTree(root).write(
+        output,
+        encoding='utf-8',
+        xml_declaration=True,
+    )
+
+
+def validate_husarion_cylinder(root, expected_mu, expected_mu2):
+    """Check the single-cylinder anisotropic wheel model."""
+    # Unlike the explicit-roller models this one is allowed -- required -- to
+    # carry fdir1, because the friction direction is the declared mechanism
+    # rather than a shortcut hidden inside a physical model.
+    roller_links = _validated_named_elements(root, 'link', ROLLER_LINK)
+    if roller_links:
+        raise RuntimeError(
+            f'husarion_cylinder must emit no roller links; '
+            f'found {len(roller_links)}')
+
+    for wheel in WHEEL_NAMES:
+        link = next(
+            (link for link in root.findall('.//link')
+             if link.attrib.get('name') == f'{wheel}_wheel_link'), None)
+        if link is None:
+            raise RuntimeError(f'Missing wheel link for {wheel}')
+        collisions = link.findall('collision')
+        if len(collisions) != 1:
+            raise RuntimeError(
+                f'{wheel}_wheel_link must have exactly one collision in '
+                f'husarion_cylinder mode; found {len(collisions)}')
+        collision = collisions[0]
+        mu = collision.findtext('surface/friction/ode/mu')
+        mu2 = collision.findtext('surface/friction/ode/mu2')
+        fdir1 = collision.find('surface/friction/ode/fdir1')
+        if mu is None or mu2 is None:
+            raise RuntimeError(
+                f'{wheel}_wheel_link collision lost its friction during SDF '
+                'conversion; anisotropic contact would silently fall back to '
+                'the isotropic sdformat default')
+        if not math.isclose(float(mu), expected_mu, rel_tol=1e-9):
+            raise RuntimeError(
+                f'{wheel}_wheel_link has mu {mu}, expected {expected_mu}')
+        if not math.isclose(float(mu2), expected_mu2, rel_tol=1e-9):
+            raise RuntimeError(
+                f'{wheel}_wheel_link has mu2 {mu2}, expected {expected_mu2}')
+        if fdir1 is None:
+            raise RuntimeError(
+                f'{wheel}_wheel_link collision is missing fdir1, which is the '
+                'entire mecanum mechanism in husarion_cylinder mode')
+        if fdir1.attrib.get('gz:expressed_in') != FRICTION_FRAME:
+            raise RuntimeError(
+                f'{wheel}_wheel_link fdir1 must carry '
+                f'gz:expressed_in="{FRICTION_FRAME}"; without a resolvable '
+                'frame the friction direction is silently ignored')
+        if not any(link.attrib.get('name') == FRICTION_FRAME
+                   for link in root.findall('.//link')):
+            raise RuntimeError(
+                f'fdir1 references frame {FRICTION_FRAME}, which is not a '
+                'link in the generated SDF; the friction direction would be '
+                'silently ignored')
+        if math.isclose(float(mu), float(mu2), rel_tol=1e-9):
+            raise RuntimeError(
+                'husarion_cylinder needs mu != mu2; isotropic friction '
+                'cannot produce mecanum motion')
 
 
 def _validate_explicit_rollers(root, collision_model, expected_mu):
@@ -261,8 +403,13 @@ def main():
     parser.add_argument('--roller-contact-kd', default='10.0')
     parser.add_argument('--roller-torsional-coefficient', default='0.0')
     parser.add_argument(
-        '--roller-collision-model', choices=('cylinder', 'barrel'),
+        '--roller-collision-model',
+        choices=('cylinder', 'barrel', 'husarion_cylinder'),
         default='barrel')
+    parser.add_argument('--wheel-contact-mu', default='0.8')
+    parser.add_argument('--wheel-contact-mu2', default='0.2')
+    parser.add_argument('--wheel-contact-slip1', default='0.0')
+    parser.add_argument('--wheel-contact-slip2', default='0.0')
     parser.add_argument('--front-left-roller-phase', default='0.22193969')
     parser.add_argument('--front-right-roller-phase', default='0.48030419')
     parser.add_argument('--rear-right-roller-phase', default='0.19668582')
@@ -279,6 +426,10 @@ def main():
             'roller_joint_friction:=' + args.roller_joint_friction,
             'roller_contact_mu:=' + args.roller_contact_mu,
             'roller_collision_model:=' + args.roller_collision_model,
+            'wheel_contact_mu:=' + args.wheel_contact_mu,
+            'wheel_contact_mu2:=' + args.wheel_contact_mu2,
+            'wheel_contact_slip1:=' + args.wheel_contact_slip1,
+            'wheel_contact_slip2:=' + args.wheel_contact_slip2,
             'front_left_roller_phase:=' + args.front_left_roller_phase,
             'front_right_roller_phase:=' + args.front_right_roller_phase,
             'rear_right_roller_phase:=' + args.rear_right_roller_phase,
@@ -329,6 +480,22 @@ def main():
                 uri.text.startswith(prefix) for prefix in WHEEL_URI_PREFIXES):
             raise RuntimeError('Unresolved wheel visual URI: ' + uri.text)
 
+    if args.roller_collision_model == 'husarion_cylinder':
+        inject_wheel_surfaces(
+            root,
+            args.wheel_contact_mu,
+            args.wheel_contact_mu2,
+            args.wheel_contact_slip1,
+            args.wheel_contact_slip2,
+        )
+        validate_husarion_cylinder(
+            root,
+            float(args.wheel_contact_mu),
+            float(args.wheel_contact_mu2),
+        )
+        _write_sdf(root, args.output)
+        return
+
     contact_mu = float(args.roller_contact_mu)
     contact_mu2 = float(args.roller_contact_mu2 or args.roller_contact_mu)
     inject_roller_surfaces(
@@ -341,12 +508,7 @@ def main():
     )
 
     _validate_explicit_rollers(root, args.roller_collision_model, contact_mu)
-
-    ET.ElementTree(root).write(
-        args.output,
-        encoding='utf-8',
-        xml_declaration=True,
-    )
+    _write_sdf(root, args.output)
 
 
 if __name__ == '__main__':

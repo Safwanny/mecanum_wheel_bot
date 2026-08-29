@@ -123,6 +123,9 @@ class OdometryTestRunner(Node):
             'roller_joint_friction': 0.0,
             'roller_contact_mu': 1.0,
             'roller_collision_model': 'barrel',
+            'wheel_contact_mu': 0.8,
+            'wheel_contact_mu2': 0.2,
+            'wheel_contact_slip1': 0.0,
             'physics_max_step_size': 0.001,
             'front_left_roller_phase': 0.22193969,
             'front_right_roller_phase': 0.48030419,
@@ -190,11 +193,17 @@ class OdometryTestRunner(Node):
         self.roller_joint_friction = self._nonnegative(
             'roller_joint_friction')
         self.roller_contact_mu = self._positive('roller_contact_mu')
+        # Recorded for provenance; only husarion_cylinder consumes these.
+        self.wheel_contact_mu = self._positive('wheel_contact_mu')
+        self.wheel_contact_mu2 = self._positive('wheel_contact_mu2')
+        self.wheel_contact_slip1 = self._nonnegative('wheel_contact_slip1')
         self.roller_collision_model = self._string(
             'roller_collision_model')
-        if self.roller_collision_model not in ('cylinder', 'barrel'):
+        if self.roller_collision_model not in (
+                'cylinder', 'barrel', 'husarion_cylinder'):
             raise ValueError(
-                'roller_collision_model must be cylinder or barrel')
+                'roller_collision_model must be cylinder, barrel, or '
+                'husarion_cylinder')
         self.physics_max_step_size = self._positive(
             'physics_max_step_size')
         self.roller_phases = {
@@ -1157,6 +1166,9 @@ class OdometryTestRunner(Node):
                 'joint_friction': self.roller_joint_friction,
                 'contact_mu': self.roller_contact_mu,
                 'collision_model': self.roller_collision_model,
+                'wheel_contact_mu': self.wheel_contact_mu,
+                'wheel_contact_mu2': self.wheel_contact_mu2,
+                'wheel_contact_slip1': self.wheel_contact_slip1,
                 'phases': self.roller_phases,
             },
             'physics_configuration': {
@@ -1414,6 +1426,9 @@ class OdometryTestRunner(Node):
                 'joint_friction': self.roller_joint_friction,
                 'contact_mu': self.roller_contact_mu,
                 'collision_model': self.roller_collision_model,
+                'wheel_contact_mu': self.wheel_contact_mu,
+                'wheel_contact_mu2': self.wheel_contact_mu2,
+                'wheel_contact_slip1': self.wheel_contact_slip1,
                 'phases': self.roller_phases,
             },
             'physics_configuration': {

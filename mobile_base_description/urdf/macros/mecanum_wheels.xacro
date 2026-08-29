@@ -15,6 +15,22 @@
         <material name="wheel_orange"/>
       </visual>
 
+      <!--
+        The explicit-roller models put every ground contact on the passive
+        roller links and leave the driven hub without collision. The
+        husarion_cylinder model instead gives the hub one cylinder and
+        reproduces the mecanum effect with a direction-dependent friction
+        cone: 4 contacts instead of 360.
+      -->
+      <xacro:unless value="${explicit_rollers}">
+        <collision name="wheel_collision">
+          <origin xyz="0 0 0" rpy="${pi / 2.0} 0 0"/>
+          <geometry>
+            <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+          </geometry>
+        </collision>
+      </xacro:unless>
+
       <xacro:cylinder_inertial mass="${wheel_hub_mass}"
                                radius="${roller_center_radius}"
                                length="${wheel_width}">
@@ -27,19 +43,31 @@
       <child link="${prefix}${name}_wheel_link"/>
       <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
-      <dynamics damping="0.05" friction="0.01"/>
+      <dynamics damping="${wheel_joint_damping}"
+                friction="${wheel_joint_friction}"/>
       <limit effort="8.0" velocity="25.0"/>
     </joint>
 
+    <!--
+      No contact parameters here on purpose. gz sdf -p discards every friction
+      form written inside a gazebo reference block: both the Gazebo-Classic
+      mu1/kp tags and nested SDF collision/surface. Anything set here would
+      silently do nothing in this pipeline. Husarion can author friction in
+      their xacro because they spawn the URDF directly; this repo pre-converts
+      to SDF, so generate_sim_sdf.py injects the wheel surface (mu, mu2,
+      slip1, and the handed fdir1) after conversion instead.
+    -->
     <gazebo reference="${prefix}${name}_wheel_link">
       <selfCollide>false</selfCollide>
     </gazebo>
 
-    <xacro:mecanum_roller_ring
-      prefix="${prefix}"
-      wheel_name="${name}"
-      roller_handedness="${roller_handedness}"
-      roller_phase="${roller_phase}"
-      roller_axial_offset="${roller_axial_offset}"/>
+    <xacro:if value="${explicit_rollers}">
+      <xacro:mecanum_roller_ring
+        prefix="${prefix}"
+        wheel_name="${name}"
+        roller_handedness="${roller_handedness}"
+        roller_phase="${roller_phase}"
+        roller_axial_offset="${roller_axial_offset}"/>
+    </xacro:if>
   </xacro:macro>
 </robot>

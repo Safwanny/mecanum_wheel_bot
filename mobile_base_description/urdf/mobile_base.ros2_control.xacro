@@ -39,10 +39,16 @@
       <xacro:wheel_interface joint_name="front_right_wheel_joint"/>
       <xacro:wheel_interface joint_name="rear_right_wheel_joint"/>
       <xacro:wheel_interface joint_name="rear_left_wheel_joint"/>
-      <xacro:roller_state_interfaces wheel_name="front_left"/>
-      <xacro:roller_state_interfaces wheel_name="front_right"/>
-      <xacro:roller_state_interfaces wheel_name="rear_right"/>
-      <xacro:roller_state_interfaces wheel_name="rear_left"/>
+      <!--
+        Every joint named in a ros2_control block must exist in the URDF, so
+        the roller interfaces are emitted only when the roller links are.
+      -->
+      <xacro:if value="${explicit_rollers}">
+        <xacro:roller_state_interfaces wheel_name="front_left"/>
+        <xacro:roller_state_interfaces wheel_name="front_right"/>
+        <xacro:roller_state_interfaces wheel_name="rear_right"/>
+        <xacro:roller_state_interfaces wheel_name="rear_left"/>
+      </xacro:if>
     </ros2_control>
   </xacro:macro>
 </robot>

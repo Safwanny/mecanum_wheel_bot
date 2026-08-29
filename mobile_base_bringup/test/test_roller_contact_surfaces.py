@@ -144,6 +144,80 @@ def test_injected_model_passes_validation(generator):
     generator._validate_explicit_rollers(root, 'barrel', 0.8)
 
 
+def build_husarion_model():
+    """No roller links; one collision on each driven hub."""
+    root = ET.Element('sdf', {'version': '1.9'})
+    model = ET.SubElement(root, 'model', {'name': 'mobile_base'})
+    ET.SubElement(model, 'link', {'name': 'base_footprint'})
+    for wheel_name in WHEEL_NAMES:
+        link = ET.SubElement(
+            model, 'link', {'name': f'{wheel_name}_wheel_link'})
+        collision = ET.SubElement(
+            link, 'collision', {'name': 'wheel_collision'})
+        geometry = ET.SubElement(collision, 'geometry')
+        ET.SubElement(geometry, 'cylinder')
+    return root
+
+
+def test_husarion_uses_the_upstream_handedness_mapping(generator):
+    """FL/RR share one friction direction, FR/RL the other."""
+    root = build_husarion_model()
+    assert generator.inject_wheel_surfaces(root, 0.8, 0.2, 0.0, 0.0) == 4
+
+    # Matches the shipping ROSbot XL wheel description.
+    expected = {'front_left': '1 -1 0', 'front_right': '1 1 0',
+                'rear_right': '1 -1 0', 'rear_left': '1 1 0'}
+    for wheel, want in expected.items():
+        link = next(item for item in root.findall('.//link')
+                    if item.attrib.get('name') == f'{wheel}_wheel_link')
+        fdir1 = link.find('collision/surface/friction/ode/fdir1')
+        assert fdir1.text == want, f'{wheel}: {fdir1.text!r} != {want!r}'
+        # The literal attribute name matters: dartsim looks it up by string,
+        # so an ElementTree-namespaced "ns0:expressed_in" silently does
+        # nothing and the friction direction spins with the wheel.
+        assert fdir1.attrib.get('gz:expressed_in') == 'base_footprint'
+    generator.validate_husarion_cylinder(root, 0.8, 0.2)
+
+
+def test_husarion_rejects_unresolvable_friction_frame(generator):
+    """base_link does not survive URDF-to-SDF; referencing it is inert."""
+    root = build_husarion_model()
+    generator.inject_wheel_surfaces(root, 0.8, 0.2, 0.0, 0.0)
+    base = next(item for item in root.findall('.//link')
+                if item.attrib.get('name') == 'base_footprint')
+    root.find('model').remove(base)
+    try:
+        generator.validate_husarion_cylinder(root, 0.8, 0.2)
+    except RuntimeError as error:
+        assert 'not a link' in str(error)
+        return
+    raise AssertionError('an unresolvable friction frame must be rejected')
+
+
+def test_husarion_rejects_isotropic_friction(generator):
+    root = build_husarion_model()
+    try:
+        generator.inject_wheel_surfaces(root, 0.8, 0.8, 0.0, 0.0)
+    except RuntimeError as error:
+        assert 'mu != mu2' in str(error)
+        return
+    raise AssertionError('mu == mu2 cannot produce mecanum motion')
+
+
+def test_husarion_rejects_leftover_rollers(generator):
+    """Both mechanisms acting at once would double-count the contact."""
+    root = build_husarion_model()
+    generator.inject_wheel_surfaces(root, 0.8, 0.2, 0.0, 0.0)
+    ET.SubElement(
+        root.find('model'), 'link', {'name': 'front_left_roller_0_link'})
+    try:
+        generator.validate_husarion_cylinder(root, 0.8, 0.2)
+    except RuntimeError as error:
+        assert 'no roller links' in str(error)
+        return
+    raise AssertionError('roller links must not survive in this mode')
+
+
 def main():
     package_dir = sys.argv[1] if len(sys.argv) > 1 else str(
         Path(__file__).resolve().parent.parent)

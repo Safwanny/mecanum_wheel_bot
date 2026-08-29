@@ -7,6 +7,11 @@
   <xacro:arg name="roller_joint_friction" default="0.0"/>
   <xacro:arg name="roller_contact_mu" default="1.0"/>
   <xacro:arg name="roller_collision_model" default="barrel"/>
+  <!-- husarion_cylinder anisotropic wheel contact; ignored by other models. -->
+  <xacro:arg name="wheel_contact_mu" default="0.8"/>
+  <xacro:arg name="wheel_contact_mu2" default="0.2"/>
+  <xacro:arg name="wheel_contact_slip1" default="0.0"/>
+  <xacro:arg name="wheel_contact_slip2" default="0.0"/>
   <xacro:arg name="front_left_roller_phase" default="0.22193969"/>
   <xacro:arg name="front_right_roller_phase" default="0.48030419"/>
   <xacro:arg name="rear_right_roller_phase" default="0.19668582"/>
