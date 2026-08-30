@@ -53,8 +53,16 @@ The wheel centers are at `x=+/-0.075 m` and `y=+/-0.067 m`. The literal
 center projection is therefore `0.142 m`, but the canonical directional-contact
 approximation has a measured effective rotational projection of `0.12521 m`.
 The controller uses that calibrated value in both inverse kinematics and wheel
-odometry. The wheel radius remains the measured `0.03074443 m`; translational
-kinematics do not depend on the rotational projection.
+odometry, so odometry and commanded motion stay consistent with each other. The
+wheel radius remains the measured `0.03074443 m`; translational kinematics do
+not depend on the rotational projection.
+
+`0.12521 m` is coupled to the contact model rather than to the geometry, and is
+the one "stable contract" here that is not a physical measurement. Re-measure it
+whenever `mu`, `mu2`, `slip1`, wheel cylinder geometry, or wheel positions
+change. It is also simulation-only: on hardware it would inject an 11.8%
+rotational error, so a physical base starts from the geometric `0.142 m` and
+derives its own value.
 
 ## Canonical mecanum contact
 

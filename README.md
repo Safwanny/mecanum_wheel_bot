@@ -559,6 +559,13 @@ value for rotational inverse kinematics and wheel odometry. Wheel radius remains
 `0.03074443 m`, so the calibration does not alter forward, lateral, or diagonal
 kinematics.
 
+That effective value belongs to the contact model, not to the robot. Re-measure
+it if the wheel contact parameters or geometry change, and do not carry it to
+hardware: it corrects a simulation artifact a physical base does not have, so
+hardware commissioning starts from the geometric `0.142 m`. Method and measured
+residuals are in
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md).
+
 Standard workflows are therefore:
 
 ```bash

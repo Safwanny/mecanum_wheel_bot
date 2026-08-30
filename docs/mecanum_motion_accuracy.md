@@ -38,9 +38,49 @@ so the EKF was not the source.
 The directional cylinder approximation therefore uses its measured effective
 rotational projection, `0.142 / 1.1340956 = 0.12521 m`, in the controller's
 inverse and forward kinematics. No friction, radius, gain, EKF, SLAM, AMCL, or
-TF parameter changed. Independent verification in both directions reduced the
-raw ground-truth yaw mismatch from `11.824%` to `0.001%`; filtered yaw error
-remained below `0.00077 rad`.
+TF parameter changed.
+
+Verification, one repetition per direction:
+
+| Direction | ground truth / raw odometry yaw | Residual scale error |
+| --- | ---: | ---: |
+| Counter-clockwise (`diagnostic_low_rotate_positive`) | `0.99848` | `0.152%` |
+| Clockwise (`diagnostic_low_rotate_negative`) | `1.00088` | `0.088%` |
+
+The ratio was `1.1340956` before calibration, an `11.824%` mismatch. It is now
+within `0.16%` of unity in both directions, and the symmetry across directions
+is what rules out a sign or handedness artifact rather than the magnitude alone.
+Run-to-run spread at one repetition is comparable to the residual itself, so
+treat these as "no detectable scale error" rather than as a precision figure.
+
+Translation is unaffected, as expected: the projection enters only the
+rotational term, and the wheel radius is unchanged. Measured in the same
+campaign, all within threshold:
+
+| Profile | Diagnostic error | Endpoint error |
+| --- | ---: | ---: |
+| `diagnostic_low_forward` | `0.455%` | `1.14 mm` |
+| `diagnostic_low_left` | `0.629%` | `1.57 mm` |
+| `diagnostic_low_forward_right` | `0.335%` | `0.84 mm` |
+
+Both rotation profiles still classify as **case D**, not `within_threshold`:
+full-run wheel RMSE exceeds the 10% threshold because error concentrates in the
+command-start transient, while steady-state tracking and chassis motion are
+accurate. This is the same transient behavior recorded for rotations under the
+earlier roller model and is not a rotational defect.
+
+### The calibrated projection is model-coupled, not geometry
+
+`0.12521 m` is not a property of the robot. The wheel centers really are at
+`x=+/-0.075` and `y=+/-0.067`, giving a literal projection of `0.142 m`. The
+calibrated value compensates for the directional-contact approximation, so it is
+only valid for that contact model. Re-measure it if `mu`, `mu2`, `slip1`, the
+wheel cylinder geometry, or the wheel positions change.
+
+**On hardware the calibrated value would be wrong.** It corrects a simulation
+artifact that a physical base does not have. Hardware commissioning should start
+from the geometric `0.142 m` and derive its own effective value from measured
+rotation, exactly as this section did for the simulation.
 
 Generated campaign data remains ignored under `phase1_results/final_fix/`.
 The measurements below remain useful engineering evidence, but their passive
