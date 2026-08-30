@@ -1,0 +1,43 @@
+# The single arbiter. This is the only node permitted to publish to
+# /mobile_base_controller/reference; every command source feeds it.
+#
+# The whole chain is TwistStamped, because nav2_util's TwistSubscriber and
+# TwistPublisher share one node-level enable_stamped_cmd_vel parameter: a node
+# is either stamped on both sides or neither, so every hop must agree. The
+# controller's reference interface is TwistStamped, so stamped it is.
+twist_mux:
+  ros__parameters:
+    use_stamped: true
+
+    topics:
+      # Autonomy arrives already limited by the velocity smoother and gated by
+      # the collision monitor.
+      navigation:
+        topic: autonomy_cmd
+        timeout: 0.5
+        priority: 10
+      # Teleop outranks autonomy: taking the keyboard always wins, including
+      # driving out of a corner the collision monitor is refusing to leave.
+      teleop:
+        topic: cmd_vel_teleop
+        timeout: 0.5
+        priority: 100
+
+    locks:
+      # Priority 255 masks every input below it, teleop included: a lock is a
+      # floor, and inputs with priority < floor are dropped.
+      #
+      # The timeout is a deadman, and the semantics are worth stating because
+      # they are inverted from the obvious reading. From twist_mux's
+      # topic_handle.hpp:
+      #
+      #   bool isLocked() const { return hasExpired() || getMessage().data; }
+      #
+      # stamp_ initialises to zero, so a lock with timeout > 0 is LOCKED from
+      # startup until a Bool(false) heartbeat arrives. estop_gate publishes
+      # that heartbeat; if it dies, the lock expires and engages on its own.
+      # That is the fail-safe property, and it is why the timeout is not 0.0.
+      estop:
+        topic: safety/estop_active
+        timeout: 0.5
+        priority: 255

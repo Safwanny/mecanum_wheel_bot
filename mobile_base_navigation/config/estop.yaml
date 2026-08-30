@@ -1,0 +1,10 @@
+estop_gate:
+  ros__parameters:
+    # Must be comfortably faster than the twist_mux lock timeout of 0.5 s, or
+    # the lock expires between heartbeats and the robot stutters to a halt.
+    publish_frequency: 10.0
+    lock_topic: safety/estop_active
+    # Engaged at startup. The operator clears it deliberately once the scene
+    # is ready, which matches the rule that a stop is latched and only a human
+    # decides the hazard is gone.
+    start_engaged: true

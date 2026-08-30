@@ -1,0 +1,62 @@
+# Last-line safety gate. It sits after arbitration so it governs teleop as
+# well as autonomy, and it directly overrides the command rather than only
+# warning.
+collision_monitor:
+  ros__parameters:
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+
+    # Input is the smoothed command; output feeds twist_mux as the autonomy
+    # source. The monitor sits before the mux deliberately, so it gates
+    # autonomy without gating the teleop a human needs to escape a corner.
+    cmd_vel_in_topic: cmd_vel_smoothed
+    cmd_vel_out_topic: autonomy_cmd
+    enable_stamped_cmd_vel: true
+
+    state_topic: collision_monitor_state
+    transform_tolerance: 0.30
+    source_timeout: 1.0
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+
+    polygons: ["FootprintApproach", "CreepZone"]
+
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: false
+      enabled: true
+
+    # A creep zone, sized from measurement rather than a guess. Worst-case
+    # stopping distance is 0.12 m (measured: e-stop engaged at 0.121 m/s, the
+    # deadman path, wheels at zero after 0.909 s). Radius is the 0.14 m
+    # footprint plus that 0.12 m plus margin.
+    #
+    # "limit" rather than "slowdown" on purpose: slowdown scales whatever was
+    # commanded, so a fast command still passes through proportionally fast,
+    # whereas limit clamps to an absolute ceiling regardless of the input.
+    # For a small robot a predictable creep speed near obstacles is worth more
+    # than a percentage.
+    CreepZone:
+      type: "circle"
+      radius: 0.30
+      action_type: "limit"
+      linear_limit: 0.05
+      angular_limit: 0.20
+      min_points: 4
+      visualize: false
+      enabled: true
+
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: /scan
+      enabled: true
+      # No min_height/max_height here: those exist only on the PointCloud
+      # source (pointcloud.hpp), not the Scan source, so copying them from
+      # Nav2's stock file would imply a filter that is never applied. This
+      # robot's scan plane sits at ~0.081 m, which such a filter would cut.

@@ -1,19 +1,30 @@
-# UNVERIFIED -- the node is wired up and activates, but is disabled by default.
+# RESOLVED in Phase 3b. The previously recorded stale-command defect -- ~9.5 s
+# of the last command being republished after input stopped, which would have
+# defeated the controller's reference_timeout -- does NOT reproduce with
+# properly stamped input. It was the artefact the old note suspected: the
+# original test drove the node with `ros2 topic pub`, leaving header.stamp at
+# zero, and velocity_timeout is evaluated against message time.
 #
-# Acceleration limiting demonstrably works: driving 0.15 m/s from rest puts
-# 0.05 then 0.10 then 0.15 on the controller's reference topic, exactly the
-# max_accel of 1.0 m/s^2 at 20 Hz.
+# Measured in simulation with a publisher stamping from the sim clock, teleop
+# at 0.10 m/s for 3 s into a live twist_mux -> smoother chain:
+#   - while input flows, the output tracks it exactly;
+#   - when input genuinely stops, the smoother's output stops too, within the
+#     same 0.5 s window as its input. It does not republish.
 #
-# Deceleration is the open question. Commanding for 3 s and then stopping
-# produced ~9.5 s of continued 0.15 on the reference topic with no decay and no
-# zero, i.e. the smoother held and republished the last command. Because it
-# republishes at 20 Hz the controller's reference_timeout never fires, so a
-# transient command would become indefinite motion -- worse than no smoother.
+# One characteristic worth knowing rather than assuming: on input loss the
+# smoother goes SILENT, it does not ramp down to zero. Deceleration limits
+# apply to commanded decelerations, not to command loss. The stop on input
+# loss therefore comes from the controller's reference_timeout as a step, not
+# as a ramp -- which is the fail-safe direction (silence stops the robot), but
+# it is not a smooth stop.
 #
-# That test drove the node with ros2 topic pub, which leaves header.stamp at
-# zero, and velocity_timeout is evaluated against message time, so the result
-# may be an artefact rather than real behaviour. Re-test with real stamped
-# teleop before enabling this. Until then velocity_smoother defaults to false.
+# Acceleration limiting was already known to work: driving 0.15 m/s from rest
+# puts 0.05 then 0.10 then 0.15 on the reference topic, exactly the max_accel
+# of 1.0 m/s^2 at 20 Hz.
+#
+# The default stays false. That is now a scope choice, not a safety hold: the
+# odometry evaluation campaign needs exact constant twists reaching the
+# controller, and enabling it by default is a separate decision.
 velocity_smoother:
   ros__parameters:
     # The stock Jazzy mecanum_drive_controller exposes no velocity or

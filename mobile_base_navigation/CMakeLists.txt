@@ -4,13 +4,19 @@ project(mobile_base_navigation)
 find_package(ament_cmake REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-install(DIRECTORY config launch rviz DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config launch rviz behavior_trees
+        DESTINATION share/${PROJECT_NAME})
 
 # Renamed so launch files can say executable='goal_to_plan'.
 install(
   PROGRAMS scripts/goal_to_plan.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME goal_to_plan
+)
+install(
+  PROGRAMS scripts/estop_gate.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME estop_gate
 )
 
 if(BUILD_TESTING)
