@@ -1,0 +1,41 @@
+# The standalone nav2_costmap_2d node is named local_costmap, so its
+# parameters live in a flat namespace, not the nested form used by
+# costmaps embedded inside planner_server.
+local_costmap:
+  ros__parameters:
+    # Rolls with the robot in the odometry frame. Setting this to map is a
+    # common copy-paste error that makes the local costmap fight AMCL.
+    global_frame: odom
+    robot_base_frame: base_footprint
+    update_frequency: 5.0
+    publish_frequency: 2.0
+    transform_tolerance: 0.30
+    rolling_window: true
+    width: 3
+    height: 3
+    resolution: 0.05
+    robot_radius: 0.14
+    always_send_full_costmap: true
+    plugins: ["obstacle_layer", "inflation_layer"]
+
+    obstacle_layer:
+      # ObstacleLayer, not VoxelLayer: one planar LiDAR, no 3D sensor.
+      plugin: nav2_costmap_2d::ObstacleLayer
+      enabled: true
+      observation_sources: scan
+      scan:
+        topic: /scan
+        data_type: LaserScan
+        clearing: true
+        marking: true
+        max_obstacle_height: 0.5
+        obstacle_max_range: 3.5
+        obstacle_min_range: 0.0
+        raytrace_max_range: 3.8
+        raytrace_min_range: 0.0
+
+    inflation_layer:
+      # Same values as the global costmap so tuning transfers.
+      plugin: nav2_costmap_2d::InflationLayer
+      inflation_radius: 0.30
+      cost_scaling_factor: 3.0

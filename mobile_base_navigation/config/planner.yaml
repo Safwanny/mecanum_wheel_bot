@@ -1,0 +1,73 @@
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 1.0
+    planner_plugins: ['GridBased']
+
+    GridBased:
+      # Jazzy requires the '::' plugin separator. Confirmed against
+      # /opt/ros/jazzy/share/nav2_smac_planner/smac_plugin_2d.xml.
+      plugin: nav2_smac_planner::SmacPlanner2D
+      tolerance: 0.125
+      downsample_costmap: false
+      downsampling_factor: 1
+      # Refuse unmapped space for now; relax deliberately later.
+      allow_unknown: false
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      cost_travel_multiplier: 2.0
+      use_final_approach_orientation: false
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      global_frame: map
+      # Nav2 defaults to base_link; this repo's chain is odom -> base_footprint.
+      robot_base_frame: base_footprint
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      transform_tolerance: 0.30
+      # Circumscribed radius of the base is 0.1367 m; a circular footprint
+      # suits a holonomic base with no preferred heading.
+      robot_radius: 0.14
+      # Matches the saved map resolution exactly.
+      resolution: 0.05
+      track_unknown_space: true
+      always_send_full_costmap: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: nav2_costmap_2d::StaticLayer
+        map_topic: /map
+        # Without this the latched map published before subscription is lost.
+        map_subscribe_transient_local: true
+
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          data_type: LaserScan
+          clearing: true
+          marking: true
+          max_obstacle_height: 0.5
+          # Below the 4.0 m LiDAR maximum, so max-range returns never mark.
+          obstacle_max_range: 3.5
+          obstacle_min_range: 0.0
+          # Slightly beyond obstacle range so free space clears properly.
+          raytrace_max_range: 3.8
+          raytrace_min_range: 0.0
+
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        # Exceeds robot_radius for a usable gradient, and keeps a zero-cost
+        # band in the 0.925 m north gap: 0.925 - 2 * 0.30 = 0.325 m.
+        # Measured: with 0.30 the gap centre reads cost 0; with 0.55 it reads
+        # 39-61. Inflation is not lethal, so a global plan still fits through
+        # either way - the band is what keeps the short route cheap, which is
+        # what matters once a controller exists. Only robot_radius can close
+        # the gap outright, by making it inscribed cost end to end.
+        inflation_radius: 0.30
+        # Shapes the gradient only; it does not resize the cleared region.
+        cost_scaling_factor: 3.0
