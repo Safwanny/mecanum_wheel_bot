@@ -34,7 +34,7 @@ Visualization Manager:
       Color Scheme: costmap
       Draw Behind: false
       Enabled: true
-      Name: GLOBAL COSTMAP - inflation must leave a gap at the north end
+      Name: GLOBAL COSTMAP
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -49,8 +49,8 @@ Visualization Manager:
       Class: rviz_default_plugins/Map
       Color Scheme: costmap
       Draw Behind: false
-      Enabled: false
-      Name: LOCAL COSTMAP - rolls in odom
+      Enabled: true
+      Name: LOCAL COSTMAP - obstacle avoidance, rolls in odom
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -63,7 +63,7 @@ Visualization Manager:
       Class: rviz_default_plugins/Polygon
       Color: 0; 255; 170
       Enabled: true
-      Name: PUBLISHED FOOTPRINT - expect about 0.14 m, not 0.22 m
+      Name: PUBLISHED FOOTPRINT
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -138,7 +138,7 @@ Visualization Manager:
     Background Color: 24; 48; 38
     Fixed Frame: map
     Frame Rate: 30
-  Name: PLANNING MODE - NO MOTION
+  Name: AUTONOMOUS NAVIGATION
   Tools:
     - Class: rviz_default_plugins/Interact
       Hide Inactive Objects: true
