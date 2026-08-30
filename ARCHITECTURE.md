@@ -2,7 +2,9 @@
 
 This repository targets ROS 2 Jazzy and Gazebo Harmonic. It models one
 un-namespaced four-wheel mecanum robot with simulation, state estimation,
-mapping, saved-map localization, and measurement-only evaluation tooling.
+mapping, saved-map localization, global path planning, and measurement-only
+evaluation tooling. Nothing in the repository drives the robot autonomously:
+planning is preview-only and no component publishes motion commands.
 
 ## Package map
 
@@ -12,6 +14,7 @@ mapping, saved-map localization, and measurement-only evaluation tooling.
 | `mobile_base_gazebo` | Gazebo worlds |
 | `mobile_base_bringup` | Top-level simulation, mapping, localization, and evaluation launches; generated SDF |
 | `mobile_base_localization` | EKF, SLAM Toolbox, map server, and AMCL |
+| `mobile_base_navigation` | Costmaps, global planner, and RViz goal-to-plan preview |
 | `mobile_base_evaluation` | Evaluation-only Gazebo ground-truth selection |
 | `mobile_base_tools` | Motion profiles, trajectory recording, diagnostics, reports, and process isolation |
 
@@ -35,6 +38,23 @@ mecanum_drive_controller
 robot_localization EKF
         +--> /odometry/filtered
         +--> odom -> base_footprint
+```
+
+Planning is a separate, unconnected branch. It reads the map, the scan and TF,
+and produces a path for display only; there is no edge from it back to the
+command topic above.
+
+```text
+/goal_pose (RViz goal tool)
+        |
+        v
+goal_to_plan  --ComputePathToPose-->  planner_server
+                                          +--> /plan
+                                          +--> /global_costmap/costmap
+                                          +--> /global_costmap/published_footprint
+
+/scan + /map + TF --> global_costmap (map frame)
+                  --> local_costmap  (odom frame, rolling)
 ```
 
 The four driven joints, in controller order, are:
@@ -151,6 +171,13 @@ Mapping and saved-map localization are mutually exclusive. AMCL uses
 `nav2_amcl::OmniMotionModel`, which describes holonomic localization motion and
 is independent of Gazebo contact physics.
 
+The costmaps consume this tree rather than owning any part of it, and both set
+`robot_base_frame: base_footprint`. Nav2 defaults that parameter to `base_link`,
+which this repository does not use for the odometry chain; leaving the default
+silently breaks every costmap transform. The global costmap runs in `map` and
+the local costmap in `odom`, so the rolling window is not disturbed by AMCL
+corrections.
+
 ## Launch composition
 
 - `simulation.launch.py` generates SDF, starts Gazebo, spawns the robot,
@@ -161,6 +188,11 @@ is independent of Gazebo contact physics.
   AMCL.
 - `odometry_evaluation.launch.py` includes canonical simulation and adds
   ground-truth/reset interfaces plus the evaluation runner.
+- `planning.launch.py` includes `localization.launch.py` and adds the costmaps,
+  planner, and goal bridge. It forces `velocity_smoother:=false`, because the
+  smoother is the one stage that remaps onto the controller reference topic.
+- `planning_harness.launch.py` runs the same costmaps and planner headlessly
+  against static transforms, with no Gazebo, for fast tuning and future CI.
 
 No launch exposes a mecanum contact-model choice. The normal entry points are:
 
@@ -169,7 +201,18 @@ ros2 launch mobile_base_bringup simulation.launch.py
 ros2 launch mobile_base_bringup mapping.launch.py world:=navigation_basic
 ros2 launch mobile_base_bringup localization.launch.py \
   world:=navigation_basic map:=/absolute/path/to/map.yaml
+ros2 launch mobile_base_navigation planning.launch.py \
+  world:=navigation_basic map:=/absolute/path/to/map.yaml
 ```
+
+Two lifecycle settings in `planning.launch.py` deviate from the `bond_timeout:
+4.0` / `autostart: true` pattern used elsewhere, both for reasons observed in
+simulation. `bond_timeout` is `0.0`: under sim time the standalone costmap node
+activates normally but is never reached by bond, and the manager then reports a
+spurious bringup failure. An `autostart` argument exists because costmap
+activation races AMCL, which cannot publish `map -> odom` until an initial pose
+is set; with `autostart:=false` the nodes are brought up by hand through
+`/lifecycle_manager_navigation/manage_nodes` once the pose is set.
 
 ## Validation boundaries
 
@@ -180,7 +223,15 @@ canonical `mu`, `mu2`, slip and `fdir1`, handed direction signs, resolvable
 friction frame, and clear failure on missing or duplicate collisions.
 
 Localization tests preserve frame ownership and the AMCL omni model. Controller
-tests preserve joint ordering and the stamped reference interface. Ground-truth
+tests preserve joint ordering and the stamped reference interface.
+
+Navigation tests recompute the circumscribed radius from `properties.xacro` and
+assert the costmap footprint covers it, so geometry and costmap cannot drift
+apart. They also pin the costmap frames, keep sensor ranges inside the LiDAR
+maximum, require the `::` plugin separator that Jazzy needs, and enforce the
+no-motion property: no controller, behavior-tree, behavior-server, mux or
+collision-monitor component, and the string `/mobile_base_controller/reference`
+in no file in the package. Ground-truth
 motion diagnostics remain measurement-only and assume the canonical contact
 implementation.
 
@@ -192,8 +243,20 @@ implementation.
 - The optional velocity smoother remains disabled pending validation of stale
   command behavior.
 - Gazebo runtime tests need isolated ROS domains/partitions and serial cleanup.
-- Full Nav2 planning, goal execution, command arbitration, and hardware drivers
-  are outside the current architecture.
+- Global path planning is present; goal execution, local control, recoveries,
+  command arbitration, and hardware drivers are outside the current
+  architecture. Nothing can drive the robot.
+- Costmap inflation is not lethal, so `inflation_radius` does not decide whether
+  a plan fits through a gap - only `robot_radius` can close one, by making the
+  gap inscribed cost end to end. Inflation governs path cost, which matters once
+  a local controller follows the gradient. Measured in `navigation_basic`: the
+  0.925 m north gap stays passable at both the tuned 0.30 m and Nav2's 0.55 m
+  default, and closes only above a 0.4625 m robot radius.
+- The standalone `nav2_costmap_2d` node reads a flat parameter namespace, unlike
+  costmaps embedded in a server, which use a nested one. The nested form fails
+  silently by falling back to `base_link`.
+- Saved maps under `/maps/` are gitignored runtime artifacts, so a fresh clone
+  must run mapping before any launch that requires a map.
 - Generated `/tmp/mobile_base_*` files are process-keyed and are not currently
   removed by launch shutdown.
 
@@ -209,4 +272,5 @@ Earlier contact experiments and their measurements are historical evidence in
 | Add a sensor | description Xacro + Gazebo Xacro + bridge + timestamp contract + sensor test |
 | Change TF ownership | simulation spawners + EKF config + TF validator tests |
 | Add a motion profile | `mobile_base_tools/config/odometry_tests.yaml` |
-| Add autonomous navigation | a new navigation package with command arbitration and safety validation |
+| Change costmap or planner tuning | `mobile_base_navigation/config/`, then `test_navigation_config.py`; iterate with `planning_harness.launch.py` |
+| Add goal execution or autonomous motion | `mobile_base_navigation`, adding a controller server and behavior tree only behind command arbitration and safety validation |

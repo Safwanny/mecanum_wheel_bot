@@ -10,6 +10,7 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 | `mobile_base_gazebo` | Gazebo Harmonic world and simulator-specific assets |
 | `mobile_base_bringup` | ros2_control configuration and top-level launch files |
 | `mobile_base_localization` | Planar EKF, SLAM Toolbox mapping, Nav2 map serving, and holonomic AMCL |
+| `mobile_base_navigation` | Costmaps, global path planning, and RViz goal-to-plan preview |
 | `mobile_base_evaluation` | Evaluation-only, identity-selected Gazebo ground truth |
 | `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
 
@@ -17,7 +18,8 @@ The packages are independent of the existing arm stack.
 
 ## Project status
 
-**Status: Phase 1 is closed and the Phase 2 mapping/localization stack is implemented.**
+**Status: Phases 1 and 2 are closed. Phase 3a adds costmaps and global path
+planning, which is preview-only - nothing in the repository can drive the robot.**
 Phase 1 delivered the mecanum simulation and control stack, raw wheel odometry,
 fused wheel/IMU odometry, explicit TF ownership,
 timestamp and TF contract validation, repeatable motion evaluation, and an
@@ -41,8 +43,9 @@ mecanum motion, odometry/EKF, SLAM mapping, occupancy-map save, saved-map loadin
 and AMCL localization. Phase 2 adds SLAM Toolbox mapping and saved-map AMCL
 localization. Earlier diagnostic campaigns and retired contact experiments are
 recorded in
-[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Full Nav2
-planning and autonomous navigation remain later work.
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Phase 3a
+adds Nav2 costmaps and a global planner. Goal execution, local control,
+recoveries, and command arbitration remain later work.
 
 ## Phase 2: mapping and saved-map localization
 
@@ -412,13 +415,163 @@ tune laser min/max range, scan and TF timing, SLAM travel/update and loop
 closure thresholds, AMCL `alpha1`-`alpha5` (especially lateral `alpha5`),
 particle counts, update thresholds, and transform tolerance.
 
-Generated maps and pose graphs are runtime artifacts and are not committed.
+Generated maps and pose graphs are runtime artifacts and are not committed; a
+fresh clone must map before any launch that requires a saved map.
 Continued mapping from a serialized graph is optional and not automatically
 launched. The simulated GPU LiDAR requires the wrappers' default Ogre2 sensor
 renderer; an Ogre1 validation run pinned all 720 beams to the 0.10 m minimum
 and cannot produce a usable map. Phase 2 does not add planners, controller
 servers, behavior trees, goal execution, obstacle avoidance, command
 arbitration, velocity smoothing, or any other autonomous-navigation component.
+
+## Phase 3a: costmaps and global path planning
+
+Phase 3a adds Nav2 costmaps and a global planner on top of saved-map
+localization. It plans and displays routes; it cannot move the robot. There is
+no controller server, behavior tree, behavior server, command mux, or collision
+monitor, and nothing publishes to `/mobile_base_controller/reference`.
+
+### Run it
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py \
+  world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Set the initial pose with **2D Pose Estimate** promptly: the costmaps cannot
+activate until AMCL publishes `map -> odom`, and the lifecycle manager gives up
+after about a minute. If bringup aborts, set the pose and then start the nodes
+by hand rather than relaunching:
+
+```bash
+ros2 service call /lifecycle_manager_navigation/manage_nodes \
+  nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
+```
+
+Then click **2D Goal Pose**. Each click plans from the robot's current pose and
+draws the route on `/plan`:
+
+```text
+[goal_to_plan]: Planning to (2.50, 3.40) in map
+[goal_to_plan]: Path found: 93 poses, 5.03 m. Shown on /plan.
+```
+
+Failures are reported with their meaning - `208` no valid path, `205` start
+occupied, `204` goal outside the map - and the node keeps serving clicks. Goal
+orientation is ignored, because `SmacPlanner2D` runs with
+`use_final_approach_orientation: false`; only the clicked position matters.
+
+Goals can also be sent from the CLI, which is how the planner is tested without
+RViz:
+
+```bash
+ros2 action send_goal /compute_path_to_pose nav2_msgs/action/ComputePathToPose "{goal: {header: {frame_id: map}, pose: {position: {x: 2.5, y: 3.4, z: 0.0}, orientation: {w: 1.0}}}, use_start: false}"
+```
+
+### Headless tuning harness
+
+Costmap and planner tuning iterates faster without Gazebo. The harness runs the
+same configuration against static transforms, so a plan takes seconds:
+
+```bash
+ros2 launch mobile_base_navigation planning_harness.launch.py \
+  map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml" rviz:=true
+```
+
+Confirm the stack is active rather than merely launched, and that the footprint
+is the robot's rather than Nav2's default:
+
+```bash
+ros2 lifecycle get /planner_server
+ros2 topic echo /global_costmap/published_footprint --once
+```
+
+Expect `active [3]` and a polygon near +/-0.15 m - the 0.14 m radius plus Nav2's
+default 0.01 m footprint padding. Points near +/-0.22 mean the Nav2 default
+radius is still in force.
+
+### Sizing, and why it is derived rather than inherited
+
+Nav2's defaults are sized for a robot three to four times larger than this one.
+Every value below comes from the robot or the sensor:
+
+| Parameter | Value | Source |
+| --- | --- | --- |
+| `robot_radius` | `0.14` | 0.1367 m circumscribed radius from `properties.xacro`, rounded up |
+| `inflation_radius` | `0.30` | Exceeds the footprint, and leaves a zero-cost band in the 0.925 m north gap |
+| `resolution` | `0.05` | Matches the saved map exactly; mismatches cause resampling artifacts |
+| `obstacle_max_range` | `3.5` | Inside the 4.0 m LiDAR maximum, so max-range returns never mark |
+| `raytrace_max_range` | `3.8` | Beyond marking range, so free space clears properly |
+| `robot_base_frame` | `base_footprint` | Nav2 defaults to `base_link`, which this repository does not use |
+
+A circular footprint suits a holonomic base, which has no preferred heading to
+model. The local costmap repeats the footprint and inflation so tuning
+transfers, but runs in `odom` with `rolling_window: true`; setting it to `map`
+is a common error that makes it fight AMCL corrections. Both costmaps use
+`ObstacleLayer` rather than `VoxelLayer`: there is one planar LiDAR and no 3D
+sensor to populate voxels.
+
+Plugin strings use the `::` separator that Jazzy requires. Read the installed
+manifest when adding one - `nav2_smac_planner::SmacPlanner2D` was confirmed
+against `/opt/ros/jazzy/share/nav2_smac_planner/smac_plugin_2d.xml` - rather
+than copying a `/`-style string from an older configuration.
+
+### What inflation does and does not do
+
+```text
+cost(d) = INSCRIBED_INFLATED_OBSTACLE * e^(-cost_scaling_factor * (d - robot_radius))
+```
+
+Raising `cost_scaling_factor` makes cost fall off *faster*, so paths run
+**closer** to walls; it does not enlarge the cleared region. Set
+`inflation_radius` for reach first, then shape the gradient.
+
+More importantly, **inflation is not lethal**. Only the inscribed band within
+`robot_radius` blocks a global plan, so `inflation_radius` does not decide
+whether a route fits - it decides what that route costs, which is what a local
+controller will follow once one exists. Measured in `navigation_basic`, whose
+interior wall leaves a 0.925 m gap at its north end:
+
+| Configuration | Result |
+| --- | --- |
+| `robot_radius` 0.14, `inflation_radius` 0.30 | 4.48 m through the gap, gap centre cost 0 |
+| `robot_radius` 0.14, `inflation_radius` 0.55 | 4.57 m through the gap, gap centre cost 39-61 |
+| Nav2 defaults, 0.22 and 0.55 | 4.56 m, still through the gap |
+| `robot_radius` 0.50 | 10.59 m detour south, gap inscribed end to end |
+
+So the gap is closed by footprint, not by inflation, and Nav2's defaults are not
+tight enough to fail this map. Changing `inflation_radius` through `ros2 param
+set` does not take effect on the published costmap; set it at launch instead.
+
+### Phase 3a validation coverage
+
+Static tests recompute the circumscribed radius from `properties.xacro` and
+assert the costmap footprint covers it, so geometry and costmap cannot drift
+apart. They pin both costmaps' frames, keep sensor ranges inside the LiDAR
+maximum, require the `::` plugin separator, and enforce the no-motion property
+by name: no controller, behavior-tree, behavior-server, mux or collision-monitor
+component, and `/mobile_base_controller/reference` in no file in the package.
+
+The no-motion property is also checked at runtime. With the stack up and goals
+being clicked, this must report zero and the robot must not move:
+
+```bash
+ros2 topic info /mobile_base_controller/reference -v | grep -i "publisher count"
+```
+
+The RViz goal tool is a pure publisher; the `bt_navigator` coupling lives in the
+Nav2 *panel*, which is deliberately absent. `goal_to_plan` holds a single action
+client on `/compute_path_to_pose` and publishes nothing but `/rosout`.
+
+### Phase 3a tuning and limitations
+
+`navigation_narrow` is out of scope: it has no saved map, and the north gap in
+`navigation_basic` already exercises the same geometry. Phase 3a adds no
+controller server, behavior tree, goal execution, recoveries, command
+arbitration, or collision monitoring; the velocity smoother stays disabled
+because it is the one stage that remaps onto the controller reference topic.
+The harness needs no Gazebo and is a candidate for CI once planning regressions
+are worth asserting.
 
 ## Units and CAD source
 
@@ -1147,6 +1300,11 @@ pattern, and passive roller velocity in `/joint_states`.
 - Odometry: `/mobile_base_controller/odometry`
 - Joint states: `/joint_states`
 - TF: `odom -> base_footprint -> base_link`
+- Planning goal in: `/goal_pose` (`geometry_msgs/msg/PoseStamped`)
+- Planned path out: `/plan` (`nav_msgs/msg/Path`)
+
+Nothing in `mobile_base_navigation` publishes to the command topic. That is a
+tested property, not a convention.
 
 Wheel joint names are coupled to `mobile_base_bringup/config/controllers.yaml` and
 `mobile_base.ros2_control.xacro`. Do not rename these without updating both files and
@@ -1165,7 +1323,7 @@ anisotropic contact parameters for the selected Gazebo physics engine.
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` builds all six packages on ROS 2 Jazzy and runs the
+`.github/workflows/ci.yaml` builds all seven packages on ROS 2 Jazzy and runs the
 deterministic unit, lint, Xacro/URDF, configuration, Python compilation, and
 whitespace checks. Gazebo launch tests and the formal campaign stay out of
 normal pull-request CI; they remain explicit runtime validation on a stable
