@@ -10,7 +10,7 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 | `mobile_base_gazebo` | Gazebo Harmonic world and simulator-specific assets |
 | `mobile_base_bringup` | ros2_control configuration and top-level launch files |
 | `mobile_base_localization` | Planar EKF, SLAM Toolbox mapping, Nav2 map serving, and holonomic AMCL |
-| `mobile_base_navigation` | Costmaps, global path planning, and RViz goal-to-plan preview |
+| `mobile_base_navigation` | Costmaps, planning, control, behavior tree, command arbitration and e-stop |
 | `mobile_base_evaluation` | Evaluation-only, identity-selected Gazebo ground truth |
 | `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
 
@@ -18,8 +18,9 @@ The packages are independent of the existing arm stack.
 
 ## Project status
 
-**Status: Phases 1 and 2 are closed. Phase 3a adds costmaps and global path
-planning, which is preview-only - nothing in the repository can drive the robot.**
+**Status: Phases 1, 2 and 3 are closed. The robot navigates autonomously in
+simulation: set an initial pose, give it a goal, and it drives there avoiding
+obstacles, repeatedly, behind a latching emergency stop.**
 Phase 1 delivered the mecanum simulation and control stack, raw wheel odometry,
 fused wheel/IMU odometry, explicit TF ownership,
 timestamp and TF contract validation, repeatable motion evaluation, and an
@@ -43,9 +44,11 @@ mecanum motion, odometry/EKF, SLAM mapping, occupancy-map save, saved-map loadin
 and AMCL localization. Phase 2 adds SLAM Toolbox mapping and saved-map AMCL
 localization. Earlier diagnostic campaigns and retired contact experiments are
 recorded in
-[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Phase 3a
-adds Nav2 costmaps and a global planner. Goal execution, local control,
-recoveries, and command arbitration remain later work.
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Phase 3
+adds the full Nav2 stack: costmaps and a global planner (3a), the command chain
+built but disconnected (3b), and autonomous driving behind arbitration and an
+e-stop (3c). Everything is verified in simulation only; hardware commissioning
+is later work.
 
 ## Phase 2: mapping and saved-map localization
 
@@ -431,12 +434,35 @@ localization. It plans and displays routes; it cannot move the robot. There is
 no controller server, behavior tree, behavior server, command mux, or collision
 monitor, and nothing publishes to `/mobile_base_controller/reference`.
 
-### Run it
+### Drive it
 
 ```bash
 ros2 launch mobile_base_navigation planning.launch.py \
   world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
 ```
+
+**The e-stop is engaged at startup.** That is deliberate: a stop is latched, and
+a human decides when the scene is ready. Clear it before the robot will move:
+
+```bash
+ros2 service call /estop_gate/reset std_srvs/srv/Trigger
+```
+
+Then set **2D Pose Estimate** once, and click **2D Goal Pose** wherever you want
+the robot to go. It drives there, avoiding obstacles, and stops. The pose it
+reaches is simply where the next goal starts from — click again, as often as you
+like, with no re-initialisation. A measured 5-goal sequence succeeded 5/5.
+
+To stop it at any time:
+
+```bash
+ros2 service call /estop_gate/engage std_srvs/srv/Trigger
+```
+
+The stop latches. Reset restores *permission*, not motion: the robot stays put
+until a fresh goal arrives, and never resumes the interrupted one. Killing
+`estop_gate` outright also stops the robot — the lock is a deadman, and silence
+engages it.
 
 Set the initial pose with **2D Pose Estimate** promptly: the costmaps cannot
 activate until AMCL publishes `map -> odom`, and the lifecycle manager gives up
@@ -543,33 +569,82 @@ So the gap is closed by footprint, not by inflation, and Nav2's defaults are not
 tight enough to fail this map. Changing `inflation_radius` through `ros2 param
 set` does not take effect on the published costmap; set it at launch instead.
 
-### Phase 3a validation coverage
+### Phase 3 validation coverage
 
 Static tests recompute the circumscribed radius from `properties.xacro` and
 assert the costmap footprint covers it, so geometry and costmap cannot drift
 apart. They pin both costmaps' frames, keep sensor ranges inside the LiDAR
-maximum, require the `::` plugin separator, and enforce the no-motion property
-by name: no controller, behavior-tree, behavior-server, mux or collision-monitor
-component, and `/mobile_base_controller/reference` in no file in the package.
+maximum, require the `::` plugin separator, and enforce the **single-arbiter
+invariant**: exactly one node publishes `/mobile_base_controller/reference`,
+and it is `twist_mux`.
 
-The no-motion property is also checked at runtime. With the stack up and goals
-being clicked, this must report zero and the robot must not move:
+They also pin every holonomic trap, because Nav2's diff-drive defaults fail
+*silently* on a mecanum base — the configuration looks right and the robot just
+behaves like a differential one:
+
+| Stock default | What it does here | Set to |
+| --- | --- | ---: |
+| `min_y_velocity_threshold: 0.5` | zeroes every lateral command this robot can produce | `0.001` |
+| `motion_model: "DiffDrive"` | MPPI never samples lateral motion | `"Omni"` |
+| `robot_base_frame: base_link` | breaks every costmap and server transform | `base_footprint` |
+| `odom_topic: /odom` | no such topic here; MPPI believes the robot never moves | `/odometry/filtered` |
+| smoother `max_velocity: [_, 0.0, _]` | clamps lateral velocity to zero after MPPI produced it | non-zero `y` |
+
+The last one is worth dwelling on. `controller_server` and `bt_navigator` each
+have their own `odom_topic`, and a dead odometry subscription produces no error
+at all — the node stays active. The measured symptom was commands pinned near
+0.02 m/s against a 0.15 limit, and the robot driving the wrong way.
+
+Runtime verification, all in simulation:
 
 ```bash
 ros2 topic info /mobile_base_controller/reference -v | grep -i "publisher count"
 ```
 
-The RViz goal tool is a pure publisher; the `bt_navigator` coupling lives in the
-Nav2 *panel*, which is deliberately absent. `goal_to_plan` holds a single action
-client on `/compute_path_to_pose` and publishes nothing but `/rosout`.
+Must report exactly **1**. More than one publisher means something bypassed both
+the mux and the e-stop.
 
-### Phase 3a tuning and limitations
+### Measured stop path
+
+Numbers, not estimates, all at 0.121 m/s and confirmed from `/joint_states`
+rather than from a command topic:
+
+| Trigger | Distance travelled | Wheels at zero |
+| --- | ---: | ---: |
+| `estop_gate/engage` service | 0.065 m | 0.523 s |
+| `estop_gate` killed (deadman) | 0.120 m | 0.909 s |
+
+The deadman path costs roughly one extra lock timeout, which is the design
+working as intended. `twist_mux` never republishes and never emits a zero — it
+simply stops publishing — so the final stop always comes from the controller's
+own `reference_timeout: 0.5`. A zero on a command topic is not a stopped robot;
+what makes these numbers evidence is the wheel feedback, and even then only for
+simulated wheels.
+
+Rotation-in-place clearance was measured before enabling `Spin`: a full turn
+changed the closest observed obstacle distance by **0.01 m**. The footprint is
+circular, so rotating sweeps nothing beyond the radius it already occupies —
+which is why the stock warning about surprise rotations, written for
+rectangular and legged bases, does not apply here.
+
+### Phase 3 tuning and limitations
 
 `navigation_narrow` is out of scope: it has no saved map, and the north gap in
-`navigation_basic` already exercises the same geometry. Phase 3a adds no
-controller server, behavior tree, goal execution, recoveries, command
-arbitration, or collision monitoring; the velocity smoother stays disabled
-because it is the one stage that remaps onto the controller reference topic.
+`navigation_basic` already exercises the same geometry.
+
+Goal error can exceed `xy_goal_tolerance`. The planner has its own `tolerance`
+of 0.125 m for goals it cannot reach exactly, and the checker adds 0.15 m on
+top, so a goal placed against an obstacle can settle up to ~0.275 m out. A
+5-goal sequence measured 0.119–0.262 m.
+
+`yaw_goal_tolerance` is deliberately loose at 0.50 rad. These goals are
+position-to-position, and a tight yaw tolerance is the known cause of a robot
+that re-approaches its goal forever without settling. Husarion go further still
+on mecanum and set 6.3, ignoring final heading entirely.
+
+The bringup velocity smoother stays disabled: this stack runs its own inside the
+navigation chain, and two smoothers would both remap onto the controller
+reference and break the single-arbiter rule.
 The harness needs no Gazebo and is a candidate for CI once planning regressions
 are worth asserting.
 
@@ -1300,10 +1375,14 @@ pattern, and passive roller velocity in `/joint_states`.
 - Odometry: `/mobile_base_controller/odometry`
 - Joint states: `/joint_states`
 - TF: `odom -> base_footprint -> base_link`
-- Planning goal in: `/goal_pose` (`geometry_msgs/msg/PoseStamped`)
+- Navigation goal in: `/goal_pose` (`geometry_msgs/msg/PoseStamped`)
 - Planned path out: `/plan` (`nav_msgs/msg/Path`)
+- Teleop into the mux: `/cmd_vel_teleop` (`geometry_msgs/msg/TwistStamped`)
+- E-stop lock: `/safety/estop_active` (`std_msgs/msg/Bool`)
 
-Nothing in `mobile_base_navigation` publishes to the command topic. That is a
+`twist_mux` is the **only** node permitted to publish the command topic. Every
+source feeds the mux instead; publishing to the controller reference directly
+bypasses both arbitration and the emergency stop. That single-arbiter rule is a
 tested property, not a convention.
 
 Wheel joint names are coupled to `mobile_base_bringup/config/controllers.yaml` and

@@ -2,9 +2,10 @@
 
 This repository targets ROS 2 Jazzy and Gazebo Harmonic. It models one
 un-namespaced four-wheel mecanum robot with simulation, state estimation,
-mapping, saved-map localization, global path planning, and measurement-only
-evaluation tooling. Nothing in the repository drives the robot autonomously:
-planning is preview-only and no component publishes motion commands.
+mapping, saved-map localization, autonomous navigation, and measurement-only
+evaluation tooling. The robot drives itself: set an initial pose, give a goal,
+and it navigates there avoiding obstacles. Every command reaches the base
+through a single arbiter behind a latching emergency stop.
 
 ## Package map
 
@@ -14,7 +15,7 @@ planning is preview-only and no component publishes motion commands.
 | `mobile_base_gazebo` | Gazebo worlds |
 | `mobile_base_bringup` | Top-level simulation, mapping, localization, and evaluation launches; generated SDF |
 | `mobile_base_localization` | EKF, SLAM Toolbox, map server, and AMCL |
-| `mobile_base_navigation` | Costmaps, global planner, and RViz goal-to-plan preview |
+| `mobile_base_navigation` | Costmaps, planner, controller, behavior tree, command arbitration and e-stop |
 | `mobile_base_evaluation` | Evaluation-only Gazebo ground-truth selection |
 | `mobile_base_tools` | Motion profiles, trajectory recording, diagnostics, reports, and process isolation |
 
@@ -40,22 +41,51 @@ robot_localization EKF
         +--> odom -> base_footprint
 ```
 
-Planning is a separate, unconnected branch. It reads the map, the scan and TF,
-and produces a path for display only; there is no edge from it back to the
-command topic above.
+Navigation feeds the command topic above through one arbiter. Sources are
+limited, then gated for collisions, then arbitrated; `twist_mux` is the only
+node permitted to publish the controller reference.
 
 ```text
-/goal_pose (RViz goal tool)
+/goal_pose (RViz 2D Goal Pose)
         |
         v
-goal_to_plan  --ComputePathToPose-->  planner_server
-                                          +--> /plan
-                                          +--> /global_costmap/costmap
-                                          +--> /global_costmap/published_footprint
-
-/scan + /map + TF --> global_costmap (map frame)
-                  --> local_costmap  (odom frame, rolling)
+bt_navigator  --NavigateToPose-->  planner_server --> /plan
+        |                          controller_server
+        |                                  |
+        v                          /cmd_vel_nav
+behavior_server (wait, spin, backup) ------+
+                                           |
+                                           v
+                                  velocity_smoother
+                                           |
+                                   /cmd_vel_smoothed
+                                           |
+                                           v
+                                  collision_monitor
+                                           |
+                                    /autonomy_cmd
+                                           |
+teleop /cmd_vel_teleop --------------------+
+estop_gate /safety/estop_active (lock) ----+
+                                           |
+                                           v
+                                      twist_mux
+                                           |
+                                           v
+                          /mobile_base_controller/reference
 ```
+
+`bt_navigator` subscribes to `/goal_pose` itself, so RViz's built-in **2D Goal
+Pose** tool executes a goal with no bridge node in between. Note that
+`nav2_rviz_plugins`' "Nav2 Goal" tool is *not* interchangeable: it publishes
+nothing and only drives the Nav2 panel, so a click does nothing without it.
+
+The collision monitor sits **before** the mux, so it gates autonomy without
+gating the teleop a human needs to drive out of a corner. The e-stop covers
+what it no longer does: a `twist_mux` lock at priority 255 masks every input
+below it, teleop included. The lock is a deadman - `estop_gate` publishes a
+`Bool` heartbeat, and a lock whose timeout elapses counts as engaged, so
+killing the gate stops the robot.
 
 The four driven joints, in controller order, are:
 
@@ -229,9 +259,10 @@ Navigation tests recompute the circumscribed radius from `properties.xacro` and
 assert the costmap footprint covers it, so geometry and costmap cannot drift
 apart. They also pin the costmap frames, keep sensor ranges inside the LiDAR
 maximum, require the `::` plugin separator that Jazzy needs, and enforce the
-no-motion property: no controller, behavior-tree, behavior-server, mux or
-collision-monitor component, and the string `/mobile_base_controller/reference`
-in no file in the package. Ground-truth
+single-arbiter invariant: exactly one node publishes
+`/mobile_base_controller/reference`, and it is `twist_mux`. They also pin the
+holonomic traps Nav2's diff-drive defaults would silently reintroduce, and
+require the e-stop lock to outrank every command source with a deadman timeout. Ground-truth
 motion diagnostics remain measurement-only and assume the canonical contact
 implementation.
 
@@ -243,9 +274,18 @@ implementation.
 - The optional velocity smoother remains disabled pending validation of stale
   command behavior.
 - Gazebo runtime tests need isolated ROS domains/partitions and serial cleanup.
-- Global path planning is present; goal execution, local control, recoveries,
-  command arbitration, and hardware drivers are outside the current
-  architecture. Nothing can drive the robot.
+- Autonomous navigation is present and verified in simulation only. Hardware
+  drivers remain outside the architecture, and no claim here is hardware
+  evidence: the stop path was measured against simulated wheel feedback.
+- Measured stop distances at 0.121 m/s: 0.065 m when the e-stop service is
+  called, 0.120 m when `estop_gate` is killed outright (the deadman path costs
+  up to one extra lock timeout). `twist_mux` never republishes or emits zero -
+  it simply stops publishing - so the final stop comes from the controller's
+  own `reference_timeout: 0.5`.
+- Nav2 defaults `odom_topic` to `/odom` in both `controller_server` and
+  `bt_navigator`. This system has no `/odom`; the EKF publishes
+  `/odometry/filtered`. A dead odometry subscription is silent - MPPI simply
+  believes the robot never moves and produces degenerate control.
 - Costmap inflation is not lethal, so `inflation_radius` does not decide whether
   a plan fits through a gap - only `robot_radius` can close one, by making the
   gap inscribed cost end to end. Inflation governs path cost, which matters once
@@ -273,4 +313,5 @@ Earlier contact experiments and their measurements are historical evidence in
 | Change TF ownership | simulation spawners + EKF config + TF validator tests |
 | Add a motion profile | `mobile_base_tools/config/odometry_tests.yaml` |
 | Change costmap or planner tuning | `mobile_base_navigation/config/`, then `test_navigation_config.py`; iterate with `planning_harness.launch.py` |
-| Add goal execution or autonomous motion | `mobile_base_navigation`, adding a controller server and behavior tree only behind command arbitration and safety validation |
+| Change how the robot drives | `mobile_base_navigation/config/controller.yaml`, then `test_navigation_config.py` |
+| Add a command source | `config/twist_mux.yaml`; feed the mux, never the controller reference directly |
