@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Launch costmaps and the global planner headlessly, without Gazebo."""
+"""
+Launch the map, global costmap and planner headlessly, without Gazebo.
+
+This stays a planning-only tuning harness. The local costmap now belongs
+to controller_server as an embedded sub-node, and the command chain needs
+a robot, so neither appears here.
+"""
 
 from pathlib import Path
 
@@ -34,7 +40,6 @@ def _planning_nodes(context):
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     planner_config = LaunchConfiguration('planner_config')
-    local_costmap_config = LaunchConfiguration('local_costmap_config')
     rviz_config = LaunchConfiguration('rviz_config')
 
     return [
@@ -56,16 +61,6 @@ def _planning_nodes(context):
             name='planner_server',
             parameters=[
                 planner_config,
-                {'use_sim_time': use_sim_time},
-            ],
-            output='screen',
-        ),
-        Node(
-            package='nav2_costmap_2d',
-            executable='nav2_costmap_2d',
-            name='local_costmap',
-            parameters=[
-                local_costmap_config,
                 {'use_sim_time': use_sim_time},
             ],
             output='screen',
@@ -97,9 +92,7 @@ def _planning_nodes(context):
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'autostart': True,
-                'node_names': [
-                    'map_server', 'planner_server', 'local_costmap',
-                ],
+                'node_names': ['map_server', 'planner_server'],
                 'bond_timeout': 4.0,
             }],
             output='screen',
@@ -141,12 +134,6 @@ def generate_launch_description():
             'planner_config',
             default_value=PathJoinSubstitution([
                 share, 'config', 'planner.yaml',
-            ]),
-        ),
-        DeclareLaunchArgument(
-            'local_costmap_config',
-            default_value=PathJoinSubstitution([
-                share, 'config', 'local_costmap.yaml',
             ]),
         ),
         DeclareLaunchArgument(

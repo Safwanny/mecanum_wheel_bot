@@ -1,0 +1,18 @@
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    # Nav2 defaults this to base_link; this repo uses base_footprint.
+    robot_base_frame: base_footprint
+    # Nav2 defaults to /odom, which does not exist in this system. The EKF
+    # publishes the fused estimate on /odometry/filtered.
+    odom_topic: /odometry/filtered
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code

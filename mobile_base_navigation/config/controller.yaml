@@ -1,0 +1,156 @@
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    costmap_update_timeout: 0.30
+
+    # Nav2 defaults this to "odom", which has no publisher in this system.
+    # MPPI feeds the measured velocity back into its optimiser, so with a dead
+    # odometry subscription it believes the robot is permanently stationary,
+    # only ever commands one acceleration step from rest, and produces
+    # degenerate control. Measured symptom: commands pinned near 0.02 m/s
+    # against a 0.15 limit, and the robot driving the wrong way. This is the
+    # same trap as bt_navigator's odom_topic - the controller has its own.
+    odom_topic: /odometry/filtered
+
+    # Nav2's stock min_y_velocity_threshold is 0.5, which is a diff-drive
+    # default: it zeroes any lateral command below 0.5 m/s. This robot's whole
+    # validated envelope is 0.10 m/s, so the stock value would discard every
+    # strafe and the mecanum base would silently behave like a differential
+    # one. Husarion's ROSbot XL mecanum config uses 0.001 for the same reason.
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    use_realtime_priority: false
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+
+    general_goal_checker:
+      stateful: true
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # Must exceed the planner's own tolerance (0.125 in planner.yaml): the
+      # planner may legitimately end a path 0.125 m short of an unreachable
+      # goal, and a tighter checker would then refuse a goal the robot has
+      # actually arrived at. Still under the robot's 0.216 m length, and well
+      # above the 0.05 m costmap resolution.
+      xy_goal_tolerance: 0.15
+      # Deliberately generous. These goals are position-to-position, and a
+      # tight yaw tolerance is the known cause of the robot re-approaching the
+      # goal forever without settling its final heading. A holonomic base can
+      # correct heading without repositioning, so there is little to gain from
+      # tightening this. Husarion go further on mecanum and set 6.3, which
+      # ignores final yaw entirely.
+      yaw_goal_tolerance: 0.50
+
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+
+      # Holonomic. The installed library reports the valid options as
+      # DiffDrive, Omni and Ackermann; the stock value is DiffDrive, which
+      # would never sample lateral motion on a mecanum base.
+      motion_model: "Omni"
+
+      time_steps: 56
+      model_dt: 0.05
+      # Stock 2000. MPPI cost scales with batch_size x time_steps and competes
+      # with Gazebo for the RTF budget; measure RTF and record what was used.
+      batch_size: 1000
+      iteration_count: 1
+
+      # Sized to the validated operating envelope, not to a ceiling. All
+      # accuracy characterisation was done at 0.10 m/s and 0.30 rad/s; the
+      # velocity smoother's 0.5 / 0.5 / 2.0 limits have never been exercised
+      # and are aspirational, so they are a bound here rather than a target.
+      vx_max: 0.15
+      vx_min: -0.15
+      vy_max: 0.15
+      wz_max: 0.60
+
+      # Sampling spread. vy_std must be non-zero or the omni model explores no
+      # lateral motion regardless of the motion model.
+      vx_std: 0.10
+      vy_std: 0.10
+      wz_std: 0.20
+
+      # Acceleration bounds. These are where acceleration limiting lives while
+      # the velocity smoother's stale-command question is unresolved.
+      ax_max: 1.0
+      ax_min: -1.0
+      ay_max: 1.0
+      ay_min: -1.0
+      az_max: 2.0
+
+      prune_distance: 1.0
+      transform_tolerance: 0.30
+      temperature: 0.3
+      gamma: 0.015
+      visualize: false
+      regenerate_noises: true
+
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+
+      # PreferForwardCritic is deliberately absent: it penalises the lateral
+      # and reverse motion a mecanum base exists to use.
+      critics: [
+        "ConstraintCritic", "CostCritic", "GoalCritic",
+        "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+        "PathAngleCritic"]
+
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.3
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        near_collision_cost: 253
+        critical_cost: 300.0
+        # The footprint is circular and robot_radius already covers it, so
+        # per-point footprint checking buys nothing but CPU here.
+        consider_footprint: false
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        trajectory_point_step: 2
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.3
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 0.5
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.3
+        max_angle_to_furthest: 1.0
+        mode: 0
