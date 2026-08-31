@@ -51,6 +51,176 @@ built but disconnected (3b), and autonomous driving behind arbitration and an
 e-stop (3c). Everything is verified in simulation only; hardware commissioning
 is later work.
 
+## Quick start: empty world to autonomous navigation
+
+The complete path, in order, with every command. Each stage builds on the one
+before it. If you only want to watch the robot drive, skip to stage 5 — the
+repository ships no map, so you must map once first.
+
+Build and source once per shell:
+
+```bash
+cd "$HOME/ros2_ws" && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install && source install/setup.bash
+```
+
+### Stage 1 — play in an empty world
+
+No map, no localization, no navigation. Just the robot, so you can drive it by
+hand and confirm the base works.
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py world:=empty
+```
+
+In a second terminal, drive it. Teleop needs its own terminal because it reads
+the keyboard directly:
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true -p frame_id:=base_link -p speed:=0.15 -p turn:=0.5 -p use_sim_time:=true -r cmd_vel:=/mobile_base_controller/reference
+```
+
+Use `i` and `,` for forward and reverse, and `j` and `l` to rotate in place.
+Press `k` to stop — releasing a key does **not** stop the robot, because
+`teleop_twist_keyboard` sends one message per keypress and there is no
+key-release event. The robot coasts until the controller's `reference_timeout`
+of 0.5 s expires, about 7.5 cm at the default speed.
+
+Do not use `u`, `o`, `m` or `.` for mecanum diagonals — those keys combine
+translation with rotation. To strafe, publish directly:
+
+```bash
+ros2 topic pub -r 20 /mobile_base_controller/reference geometry_msgs/msg/TwistStamped "{header: {frame_id: base_link}, twist: {linear: {y: 0.1}}}"
+```
+
+Other worlds are available: `navigation_basic` (a 10 x 8 m room with an
+interior wall and obstacles) and `navigation_narrow`.
+
+### Stage 2 — map the world
+
+Stop stage 1 first. Mapping and localization are mutually exclusive by design.
+
+```bash
+ros2 launch mobile_base_bringup mapping.launch.py world:=navigation_basic
+```
+
+RViz opens showing the live map. Drive with the same teleop command as stage 1,
+in a second terminal. How you drive determines whether the map is usable:
+
+- **Hug the perimeter**, within 2–2.5 m of a wall. The LiDAR reaches 4.0 m and
+  the room is 10 x 8 m, so the middle of the room is a dead zone where the scan
+  matcher has almost nothing to match against.
+- **Go slowly**, especially in rotation. Above roughly 0.3 m/s the map smears.
+- **Prefer forward and rotate over strafing.** Lateral odometry is this base's
+  least accurate axis and the scan matcher uses it as its prior.
+- **Close small loops often** rather than one big loop at the end.
+
+### Stage 3 — save the map
+
+With mapping still running, in a third terminal:
+
+```bash
+ros2 run nav2_map_server map_saver_cli -f "$HOME/ros2_ws/src/mobile_base/maps/navigation_basic" --ros-args -p save_map_timeout:=10000.0
+```
+
+That writes `navigation_basic.pgm` and `navigation_basic.yaml`. Confirm the
+YAML says `resolution: 0.050` — the costmaps are pinned to 0.05 m and a
+mismatch causes resampling artifacts. Then stop mapping.
+
+`maps/` is gitignored, so the map is local to your machine and a fresh clone
+must repeat stages 2 and 3.
+
+### Stage 4 — localize against the saved map
+
+```bash
+ros2 launch mobile_base_bringup localization.launch.py world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Click **2D Pose Estimate** in RViz, click where the robot actually is, and drag
+in the direction it faces. The particle cloud appears. Drive with teleop and
+watch it tighten — AMCL only converges when the robot moves.
+
+Check it from the CLI:
+
+```bash
+ros2 topic echo /amcl_pose --once
+```
+
+The `covariance` diagonal shrinking is convergence. It starts near the 0.25 you
+seeded and drops to roughly 0.01 once the robot has driven a little.
+
+### Stage 5 — navigate autonomously
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Three things, in this order:
+
+**1. Set the initial pose promptly.** Click **2D Pose Estimate** as in stage 4.
+The costmaps cannot activate until AMCL publishes `map -> odom`, and the
+lifecycle manager gives up after about a minute. If you are slow, do not
+relaunch — set the pose, then re-trigger bringup:
+
+```bash
+ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
+```
+
+**2. Clear the emergency stop.** It is engaged at startup on purpose, so a
+human decides when the scene is ready. The robot will not move until you do
+this:
+
+```bash
+ros2 service call /estop_gate/reset std_srvs/srv/Trigger
+```
+
+**3. Give it a goal.** Click **2D Goal Pose** in RViz. The robot drives there
+and stops. Click again for the next goal, as often as you like — the pose it
+reaches is simply where the next goal starts from.
+
+Goals can also be sent from the CLI, which additionally prints the motion phase
+as it changes:
+
+```bash
+ros2 action send_goal --feedback /go_to_pose mobile_base_interfaces/action/GoToPose "{x: 1.0, y: 1.0, theta_final: 0.0}"
+```
+
+To stop it at any time:
+
+```bash
+ros2 service call /estop_gate/engage std_srvs/srv/Trigger
+```
+
+The stop latches. New goals do nothing until you reset, and reset restores
+permission without resuming the interrupted goal.
+
+### Which controller is driving
+
+The default is the **discrete motion model**: one primitive at a time, no
+planner, no obstacle avoidance. For path planning and obstacle avoidance,
+launch with `controller:=nav2` instead. The two are mutually exclusive.
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py controller:=nav2 world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+### If the robot will not move
+
+In order of likelihood:
+
+```bash
+# 1. Is the e-stop engaged? (data: true means engaged)
+ros2 topic echo /safety/estop_active --once
+
+# 2. Did every server activate? All must say "active [3]".
+for n in planner_server velocity_smoother collision_monitor; do echo "$n: $(ros2 lifecycle get /$n)"; done
+
+# 3. Is exactly one publisher driving the wheels?
+ros2 topic info /mobile_base_controller/reference -v | grep -i "publisher count"
+
+# 4. Is anything reaching the wheels at all?
+ros2 topic hz /mobile_base_controller/reference
+```
+
 ## Phase 2: mapping and saved-map localization
 
 Phase 2 provides two deliberately separate operating modes. They are mutually
@@ -628,147 +798,144 @@ circular, so rotating sweeps nothing beyond the radius it already occupies —
 which is why the stock warning about surprise rotations, written for
 rectangular and legged bases, does not apply here.
 
-### Staged pose controller (alternative to Nav2's controller)
+### Discrete motion model (the default controller)
 
-An alternative local controller that drives to a pose in three explicit phases
-instead of blending every axis at once. Run it with `controller:=staged`:
+The default local controller drives using **exactly one motion primitive at a
+time**. It never blends axes. Every command it issues is either:
 
-```bash
-ros2 launch mobile_base_navigation planning.launch.py controller:=staged world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
-```
+- a pure rotation in place, or
+- a pure translation along one of eight body-frame directions.
 
-Goals go to an action server rather than the RViz goal tool, so feedback and
-cancellation come for free:
+| Primitive | Body-frame angle | Command |
+| --- | ---: | --- |
+| `FORWARD` | 0° | `+vx`, `vy = 0` |
+| `DIAGONAL_FRONT_LEFT` | +45° | `+vx`, `+vy`, equal magnitude |
+| `STRAFE_LEFT` | +90° | `vx = 0`, `+vy` |
+| `DIAGONAL_BACK_LEFT` | +135° | `-vx`, `+vy`, equal magnitude |
+| `BACKWARD` | 180° | `-vx`, `vy = 0` |
+| `DIAGONAL_BACK_RIGHT` | −135° | `-vx`, `-vy`, equal magnitude |
+| `STRAFE_RIGHT` | −90° | `vx = 0`, `-vy` |
+| `DIAGONAL_FRONT_RIGHT` | −45° | `+vx`, `-vy`, equal magnitude |
 
-```bash
-ros2 action send_goal --feedback /go_to_pose mobile_base_interfaces/action/GoToPose "{x: 1.5, y: 0.5, theta_final: 1.57}"
-```
+A diagonal is a **true** diagonal: `|vx|` equals `|vy|`, not a forward run with
+a strafe mixed into it.
 
-**It has no planner and no costmap.** It drives straight at the goal and will
-hit anything in between. The collision monitor still limits its speed near
-obstacles and the e-stop still stops it, but neither routes around anything.
-Use `controller:=nav2` (the default) for obstacle avoidance.
+#### How a goal is reached
 
-#### The state machine
-
-| State | Commands | Leaves when |
+| Phase | Commands | Leaves when |
 | --- | --- | --- |
-| `IDLE` | zero twist | a goal is accepted |
-| `ALIGN` | `omega` only, `vx = vy = 0` | heading is within `angle_tolerance_rad` of `atan2(dy, dx)` |
-| `TRANSLATE` | `vx`, `vy`, plus a heading-hold `omega` | distance is within `position_tolerance_m` |
-| `ORIENT` | `omega` only, `vx = vy = 0` | heading is within `angle_tolerance_rad` of `theta_final` |
-| `DONE` | zero twist | a new goal arrives |
+| `IDLE` | zero | a goal is accepted |
+| `ALIGN` | `omega` only | heading is within `angle_tolerance_rad` of what the chosen primitive needs |
+| `TRANSLATE` | one primitive only, `omega = 0` | within `position_tolerance_m` of the goal |
+| `ORIENT` | `omega` only | heading is within `angle_tolerance_rad` of `theta_final` |
+| `DONE` | zero | a new goal arrives |
 
-Every transition also requires `min_state_dwell_time_s` to have elapsed. Without
-that hysteresis, noise around a tolerance boundary makes the machine flap
-between phases every tick.
+**Which primitive gets used is the interesting part.** For each of the eight
+directions there is a heading the robot would have to face for the goal to lie
+exactly along it. The controller picks whichever needs the **least rotation**
+from where the robot already points. That is what puts the diagonals to work: a
+goal 45° off the robot's shoulder is reached by driving diagonally with *no
+rotation at all*, where a forward-only model would turn 45° first.
 
-Three things worth knowing about the control:
+A measured four-goal run used `DIAGONAL_FRONT_LEFT`, `STRAFE_RIGHT`,
+`DIAGONAL_BACK_RIGHT` and `DIAGONAL_BACK_LEFT` — 4/4 goals reached, 0.025 to
+0.191 m final error.
 
-- **Position error is rotated into the body frame before the gains see it.** One
-  PID runs on the error *magnitude* and its output is applied along the
-  body-frame direction, so both axes share a single integral and a single speed
-  limit rather than two loops competing for one budget.
-- **`TRANSLATE` holds heading with a real correction term**, not by commanding
-  `omega = 0`. Lateral odometry is this base's least accurate axis, so without
-  the hold it yaws away while strafing and the straight line stops being
-  straight.
-- **Every integral resets on transition.** Windup accumulated closing one
-  phase's error would otherwise keep pushing through the next, which shows up
-  as an overshoot immediately after a transition.
+#### Keeping "one motion" true, twice over
 
-If odometry goes stale beyond `odometry_timeout_s` the controller holds zero
-rather than coasting on its last command. That is the one fault that must not
-carry on driving.
+Two things conspire against the rule, and both are handled explicitly:
+
+**Heading drift during a translation.** Mecanum strafing disturbs yaw. The
+obvious fix is a small `omega` correction while translating — but that is two
+motions at once. Instead the machine drops back into `ALIGN`, rotates, and
+resumes. It keeps the *same* primitive when it does so: re-picking mid-leg made
+the robot oscillate, because near a 45° boundary a small heading change flips
+which primitive is cheapest, so it would turn one way, drift, flip, and turn
+back.
+
+**The velocity smoother downstream.** It ramps between commands, so switching
+straight from a translation to a rotation puts a genuinely blended twist on the
+wire for a few ticks. One motion at a time held at the controller's output but
+not at the wheels. `settle_time_s` holds zero on each transition so the old
+motion ramps down before the new one starts.
+
+#### Limitations — read before using it
+
+**No planner and no costmap.** It drives straight at the goal and will hit
+anything in between. The collision monitor still limits its speed near
+obstacles and the e-stop still stops it, but neither routes around anything. A
+goal behind a wall is a crash, not a detour.
+
+For obstacle avoidance, launch with `controller:=nav2`. The two controllers are
+mutually exclusive — both publish `cmd_vel_nav`, and two publishers on one
+input means the mux forwards whichever arrived last — so `controller:=nav2`
+starts `controller_server`, `behavior_server` and `bt_navigator` and leaves the
+discrete controller out, and the default does the reverse.
 
 #### Parameters
 
 Gains: `Kp_align` / `Ki_align` / `Kd_align`, `Kp_translate_pos` /
-`Ki_translate_pos` / `Kd_translate_pos`, `Kp_translate_heading` (the secondary
-hold), `Kp_orient` / `Ki_orient` / `Kd_orient`.
+`Ki_translate_pos` / `Kd_translate_pos`, `Kp_orient` / `Ki_orient` /
+`Kd_orient`.
 
 Behaviour: `angle_tolerance_rad`, `position_tolerance_m`, `max_linear_vel`,
-`max_angular_vel`, `min_state_dwell_time_s`, `integral_limit`,
-`control_frequency`, `odometry_timeout_s`, `goal_timeout_s`.
+`max_angular_vel`, `min_state_dwell_time_s`, `settle_time_s`,
+`realign_threshold_rad`, `use_diagonals`, `integral_limit`,
+`control_frequency`, `goal_timeout_s`.
 
-Topics: `command_topic` (default `cmd_vel_nav`), `odometry_topic` (default
-`/odometry/filtered`), `frame_id`.
+Frames and topics: `command_topic` (default `cmd_vel_nav`), `goal_topic`
+(default `/goal_pose`), `goal_frame` (default `map`), `robot_base_frame`
+(default `base_footprint`), `transform_timeout_s`.
 
-`blend_transitions` (default `false`) ramps the next phase's command in as the
-error closes on its tolerance, over a window of `blend_window_scale` multiples
-of that tolerance, instead of a hard stop-start switch. It is off by default
-because the hard switch is what makes each phase separately observable, which
-is the point of staging. Defaults live in
+Setting `use_diagonals: false` restricts it to forward, backward and the two
+strafes, which needs more rotation to reach the same goal.
+
+Defaults live in
 [`config/staged_pose_controller.yaml`](mobile_base_navigation/config/staged_pose_controller.yaml).
+
+#### Why it reads pose from TF, not odometry
+
+Goals arrive in the **map** frame. `/odometry/filtered` is in the **odom**
+frame. The two differ by AMCL's correction, which grows as the robot drives —
+measured at 2.04 m and 1.04 rad after a few goals in one run. Comparing a
+map-frame goal against an odom-frame pose drives the robot to the wrong place,
+and does it silently: nothing errors, the robot simply goes somewhere else. The
+controller therefore looks its pose up via TF in `goal_frame`.
+
+If that transform is missing or older than `transform_timeout_s`, the
+controller holds zero rather than coasting on the last known pose.
 
 #### Why it publishes `cmd_vel_nav`
 
 It feeds the same input Nav2's `controller_server` uses, so it inherits the
 velocity smoother, the collision monitor, arbitration and the emergency stop.
-Publishing to `/mobile_base_controller/reference` directly would reach the
-wheels but bypass all four — and the single-arbiter test would fail.
-
-That sharing is also why the two controllers are mutually exclusive: two
-publishers on `cmd_vel_nav` and the mux forwards whichever arrived last.
-`controller:=staged` starts this node and leaves `controller_server`,
-`behavior_server` and `bt_navigator` out of the lifecycle manager.
+Publishing `/mobile_base_controller/reference` directly would reach the wheels
+but bypass all four, and the single-arbiter test would fail.
 
 #### Testing it
-
-Unit and integration tests run without Gazebo, on their own ROS domain:
 
 ```bash
 colcon test --packages-select mobile_base_navigation --ctest-args -R test_staged_pose_controller
 ```
 
-They drive the node with a fake robot that *integrates the twists it publishes*,
-so the loop is genuinely closed rather than fed a scripted pose that would
-arrive regardless of what was commanded. The sequence test asserts each phase is
-entered exactly once, in order, and that `omega` stays trimming-small during
-`TRANSLATE`.
+The tests drive the node with a fake robot that *integrates the twists it
+publishes* and broadcasts the resulting TF, so the loop is genuinely closed
+rather than fed a scripted pose that would arrive regardless of what was
+commanded. They assert the phase order, that each primitive commands only its
+own axes, that diagonals have `|vx| == |vy|`, that a translation carries no
+rotation at all, and that the primitive chosen is the one needing the least
+rotation.
 
-Manually, in the simulator: launch with `controller:=staged`, set the initial
-pose in RViz, clear the e-stop, then send a goal with the action call above and
-watch the phases in the terminal. `--feedback` prints the state as it changes.
-
-The same AMCL activation race applies here as in `nav2` mode, and it is easy to
-misread: if the pose is set late the lifecycle manager gives up, the velocity
-smoother and collision monitor stay `inactive`, and the controller then cycles
-in `ALIGN` and times out. It looks like a control-loop failure and is not — the
-chain downstream of `cmd_vel_nav` is simply not running. Re-trigger bringup with
-the `manage_nodes` call above and send the goal again.
-
-A verified run, robot at the origin, goal `(1.2, 0.8, 1.571)`:
+Manually, launch as in stage 5 above and send a goal with `--feedback`. The
+feedback reports the primitive in the state string:
 
 ```text
-  -> ALIGN      (dist 1.442 m)
-  -> TRANSLATE  (dist 1.442 m)
-  -> ORIENT     (dist 0.048 m)
-success=True  "goal reached"
-  final position error : 0.041 m
-  final heading error  : 0.047 rad
+-> ALIGN[DIAGONAL_FRONT_LEFT]
+-> TRANSLATE[DIAGONAL_FRONT_LEFT]
+-> ORIENT
 ```
 
-### Phase 3 tuning and limitations
-
-`navigation_narrow` is out of scope: it has no saved map, and the north gap in
-`navigation_basic` already exercises the same geometry.
-
-Goal error can exceed `xy_goal_tolerance`. The planner has its own `tolerance`
-of 0.125 m for goals it cannot reach exactly, and the checker adds 0.15 m on
-top, so a goal placed against an obstacle can settle up to ~0.275 m out. A
-5-goal sequence measured 0.119–0.262 m.
-
-`yaw_goal_tolerance` is deliberately loose at 0.50 rad. These goals are
-position-to-position, and a tight yaw tolerance is the known cause of a robot
-that re-approaches its goal forever without settling. Husarion go further still
-on mecanum and set 6.3, ignoring final heading entirely.
-
-The bringup velocity smoother stays disabled: this stack runs its own inside the
-navigation chain, and two smoothers would both remap onto the controller
-reference and break the single-arbiter rule.
-The harness needs no Gazebo and is a candidate for CI once planning regressions
-are worth asserting.
+Pick goals with clear line of sight, since there is no planner.
 
 ## Units and CAD source
 
