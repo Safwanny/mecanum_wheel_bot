@@ -50,6 +50,166 @@ built but disconnected (3b), and autonomous driving behind arbitration and an
 e-stop (3c). Everything is verified in simulation only; hardware commissioning
 is later work.
 
+## Quick start: empty world to autonomous navigation
+
+The complete path, in order, with every command. Each stage builds on the one
+before it. The repository ships no map, so you must run stages 2 and 3 once
+before navigation will work at all.
+
+Build and source once per shell:
+
+```bash
+cd "$HOME/ros2_ws" && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install && source install/setup.bash
+```
+
+### Stage 1 — play in an empty world
+
+No map, no localization, no navigation. Just the robot, so you can drive it by
+hand and confirm the base works.
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py world:=empty
+```
+
+In a second terminal, drive it. Teleop needs its own terminal because it reads
+the keyboard directly:
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true -p frame_id:=base_link -p speed:=0.15 -p turn:=0.5 -p use_sim_time:=true -r cmd_vel:=/mobile_base_controller/reference
+```
+
+Use `i` and `,` for forward and reverse, `j` and `l` to rotate in place. Press
+`k` to stop — releasing a key does **not** stop the robot, because
+`teleop_twist_keyboard` sends one message per keypress and there is no
+key-release event. The robot coasts until the controller's `reference_timeout`
+of 0.5 s expires, about 7.5 cm at the default speed.
+
+Do not use `u`, `o`, `m` or `.` for mecanum diagonals — those keys combine
+translation with rotation. To strafe, publish directly:
+
+```bash
+ros2 topic pub -r 20 /mobile_base_controller/reference geometry_msgs/msg/TwistStamped "{header: {frame_id: base_link}, twist: {linear: {y: 0.1}}}"
+```
+
+Other worlds are available: `navigation_basic` (a 10 x 8 m room with an
+interior wall and obstacles) and `navigation_narrow`.
+
+### Stage 2 — map the world
+
+Stop stage 1 first. Mapping and localization are mutually exclusive by design.
+
+```bash
+ros2 launch mobile_base_bringup mapping.launch.py world:=navigation_basic
+```
+
+RViz opens showing the live map. Drive with the same teleop command as stage 1,
+in a second terminal. How you drive determines whether the map is usable:
+
+- **Hug the perimeter**, within 2–2.5 m of a wall. The LiDAR reaches 4.0 m and
+  the room is 10 x 8 m, so the middle is a dead zone where the scan matcher has
+  almost nothing to match against.
+- **Go slowly**, especially in rotation. Above roughly 0.3 m/s the map smears.
+- **Prefer forward and rotate over strafing.** Lateral odometry is this base's
+  least accurate axis and the scan matcher uses it as its prior.
+- **Close small loops often** rather than one big loop at the end.
+
+### Stage 3 — save the map
+
+With mapping still running, in a third terminal:
+
+```bash
+ros2 run nav2_map_server map_saver_cli -f "$HOME/ros2_ws/src/mobile_base/maps/navigation_basic" --ros-args -p save_map_timeout:=10000.0
+```
+
+That writes `navigation_basic.pgm` and `navigation_basic.yaml`. Confirm the
+YAML says `resolution: 0.050` — the costmaps are pinned to 0.05 m and a
+mismatch causes resampling artifacts. Then stop mapping.
+
+`maps/` is gitignored, so the map is local to your machine and a fresh clone
+must repeat stages 2 and 3.
+
+### Stage 4 — localize against the saved map
+
+```bash
+ros2 launch mobile_base_bringup localization.launch.py world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Click **2D Pose Estimate** in RViz, click where the robot actually is, and drag
+in the direction it faces. The particle cloud appears. Drive with teleop and
+watch it tighten — AMCL only converges when the robot moves.
+
+Check it from the CLI:
+
+```bash
+ros2 topic echo /amcl_pose --once
+```
+
+The `covariance` diagonal shrinking is convergence. It starts near the 0.25 you
+seeded and drops to roughly 0.01 once the robot has driven a little.
+
+### Stage 5 — navigate autonomously
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Three things, in this order:
+
+**1. Set the initial pose promptly.** Click **2D Pose Estimate** as in stage 4.
+The costmaps cannot activate until AMCL publishes `map -> odom`, and the
+lifecycle manager gives up after about a minute. If you are slow, do not
+relaunch — set the pose, then re-trigger bringup:
+
+```bash
+ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
+```
+
+**2. Clear the emergency stop.** It is engaged at startup on purpose, so a
+human decides when the scene is ready. The robot will not move until you do
+this:
+
+```bash
+ros2 service call /estop_gate/reset std_srvs/srv/Trigger
+```
+
+**3. Give it a goal.** Click **2D Goal Pose** in RViz. The robot plans a path
+around obstacles, drives there, and stops. Click again for the next goal, as
+often as you like — the pose it reaches is simply where the next goal starts
+from.
+
+Goals can also be sent from the CLI:
+
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "{pose: {header: {frame_id: map}, pose: {position: {x: 2.0, y: 1.0, z: 0.0}, orientation: {w: 1.0}}}}"
+```
+
+To stop it at any time:
+
+```bash
+ros2 service call /estop_gate/engage std_srvs/srv/Trigger
+```
+
+The stop latches. New goals do nothing until you reset, and reset restores
+permission without resuming the interrupted goal.
+
+### If the robot will not move
+
+In order of likelihood:
+
+```bash
+# 1. Is the e-stop engaged? (data: true means engaged)
+ros2 topic echo /safety/estop_active --once
+
+# 2. Did every server activate? All must say "active [3]".
+for n in controller_server planner_server behavior_server bt_navigator velocity_smoother collision_monitor; do echo "$n: $(ros2 lifecycle get /$n)"; done
+
+# 3. Is exactly one publisher driving the wheels?
+ros2 topic info /mobile_base_controller/reference -v | grep -i "publisher count"
+
+# 4. Is anything reaching the wheels at all?
+ros2 topic hz /mobile_base_controller/reference
+```
+
 ## Phase 2: mapping and saved-map localization
 
 Phase 2 provides two deliberately separate operating modes. They are mutually
