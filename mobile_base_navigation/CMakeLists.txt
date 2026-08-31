@@ -18,31 +18,10 @@ install(
   DESTINATION lib/${PROJECT_NAME}
   RENAME estop_gate
 )
-install(
-  PROGRAMS scripts/staged_pose_controller.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME staged_pose_controller
-)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
-
-  # Spins real nodes on the ROS graph, so it needs its own domain and must
-  # not run beside anything else publishing the same topics. 31 and 32 are
-  # taken by the bringup Gazebo tests.
-  find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_staged_pose_controller
-    test/test_staged_pose_controller.py
-    TIMEOUT 180
-  )
-  set_tests_properties(
-    test_staged_pose_controller
-    PROPERTIES
-      ENVIRONMENT
-        "ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/ros_logs;ROS_DOMAIN_ID=33"
-      RUN_SERIAL TRUE
-  )
 
   add_test(
     NAME verify_navigation_configuration
