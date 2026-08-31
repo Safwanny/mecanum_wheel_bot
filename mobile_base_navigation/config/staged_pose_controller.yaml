@@ -1,10 +1,19 @@
-# Staged holonomic pose controller: ALIGN, then TRANSLATE, then ORIENT.
+# Discrete motion model: one primitive at a time.
 #
-# This is a straight-line primitive with no planner and no costmap. It drives
-# at the goal and will hit anything in between. It publishes cmd_vel_nav, the
-# same input Nav2's controller_server uses, so the velocity smoother, the
-# collision monitor, twist_mux and the e-stop all still apply - but the
-# collision monitor only slows and limits, it does not route around anything.
+# Every command is either a pure rotation in place, or a pure translation along
+# one of eight body-frame directions - forward, backward, strafe left, strafe
+# right, and the four true diagonals where |vx| equals |vy|. Nothing is ever
+# blended.
+#
+# A goal is reached by rotating until it lies along one of those eight
+# directions, translating along it, then rotating to the final orientation.
+# The direction picked is whichever needs the least rotation from where the
+# robot already points, which is what puts the diagonals to work.
+#
+# No planner and no costmap: it drives at the goal and will hit anything in
+# between. It publishes cmd_vel_nav, so the velocity smoother, collision
+# monitor, twist_mux and e-stop still apply - but the monitor only limits
+# speed, it does not route around obstacles.
 staged_pose_controller:
   ros__parameters:
     # Phase 1: rotate in place to face the goal.
@@ -17,11 +26,11 @@ staged_pose_controller:
     Kp_translate_pos: 0.9
     Ki_translate_pos: 0.0
     Kd_translate_pos: 0.05
-    # Secondary heading hold during phase 2. A real correction term, not a
-    # zero: mecanum lateral odometry is the least accurate axis on this base,
-    # so without this the robot yaws away while strafing and the straight line
-    # stops being straight.
-    Kp_translate_heading: 0.8
+
+    # There is no heading-hold gain any more. Holding heading with a live omega
+    # term while translating would be two motions at once. Drift is corrected
+    # by dropping back into a rotate-only phase instead - see
+    # realign_threshold_rad below.
 
     # Phase 3: rotate in place to the requested final orientation.
     Kp_orient: 1.2
@@ -40,18 +49,40 @@ staged_pose_controller:
     # the machine flap between phases every tick.
     min_state_dwell_time_s: 0.3
 
-    # Ramp the next phase in near the tolerance boundary instead of a hard
-    # stop-start switch. Off by default: the hard switch is what makes each
-    # phase separately observable, which is the point of staging.
-    blend_transitions: false
-    blend_window_scale: 3.0
+    # Zero-command hold when the motion type changes. The velocity smoother
+    # ramps between commands, so switching straight from a translation to a
+    # rotation puts a blended twist on the wire for a few ticks - two motions
+    # at once. Holding zero lets the old motion ramp down first, which keeps
+    # one-motion-at-a-time true at the wheels and not just at this node.
+    settle_time_s: 0.4
+
+    # Include the four diagonals in the primitive set. With this false the
+    # robot only drives along its own axes and needs more rotation to reach
+    # the same goal.
+    use_diagonals: true
+
+    # Heading drift that sends the machine back to a rotate-only phase during
+    # a translation. Larger than angle_tolerance_rad so a run is not abandoned
+    # the instant it leaves perfect alignment. Re-aligning also re-picks the
+    # primitive for the bearing from wherever the robot has actually reached.
+    realign_threshold_rad: 0.15
 
     integral_limit: 0.5
     control_frequency: 20.0
-    # A dead odometry source is the one fault that must not coast.
-    odometry_timeout_s: 0.5
-    goal_timeout_s: 120.0
+    # A missing or stale transform is the one fault that must not coast.
+    transform_timeout_s: 0.5
+    goal_timeout_s: 180.0
 
     command_topic: cmd_vel_nav
-    odometry_topic: /odometry/filtered
+    # RViz's 2D Goal Pose tool. Subscribing here keeps click-to-drive working
+    # with no bt_navigator in the graph.
+    goal_topic: /goal_pose
+    # The robot's pose is looked up in this frame via TF, not read from
+    # /odometry/filtered. Goals arrive in map; odometry is in odom; the two
+    # differ by AMCL's correction, which grows as the robot drives. Measured
+    # divergence after a few goals: 2.04 m and 1.04 rad. Comparing a map-frame
+    # goal against an odom-frame pose drives the robot to the wrong place, and
+    # does it silently.
+    goal_frame: map
+    robot_base_frame: base_footprint
     frame_id: base_link

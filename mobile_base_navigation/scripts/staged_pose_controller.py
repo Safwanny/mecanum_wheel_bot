@@ -14,42 +14,55 @@
 # limitations under the License.
 
 """
-Drive to a pose in three sequential phases instead of blending every axis.
+Reach a pose using exactly one motion primitive at a time.
 
-ALIGN rotates in place to face the goal, TRANSLATE moves holonomically toward
-it while a light secondary loop holds that heading, and ORIENT rotates in place
-to the requested final orientation. The phases are explicit states rather than
-one combined controller, which makes each one separately observable and
-tunable.
+The robot never blends axes. Every command is one of:
 
-This is a straight-line primitive: it has no planner and no costmap, so it will
-drive into anything between the robot and the goal. It publishes into
-cmd_vel_nav, the same input Nav2's controller_server uses, so it inherits the
-velocity smoother, the collision monitor, arbitration and the emergency stop
-rather than reaching the wheels directly. That also means it and Nav2's
-controller must not run together - planning.launch.py runs one or the other.
+  - a pure rotation in place, or
+  - a pure translation along one of eight body-frame directions: forward,
+    backward, strafe left, strafe right, and the four true diagonals.
+
+A diagonal is a real diagonal - |vx| equals |vy| - not a forward run with a
+strafe mixed into it.
+
+Reaching a goal is therefore: rotate until the goal lies exactly along one of
+those eight directions, translate along it, then rotate to the requested final
+orientation. The heading chosen for the translation is whichever of the eight
+needs the least rotation from where the robot already points, which is what
+puts the diagonals to work rather than leaving them decorative: a goal off the
+robot's shoulder is reached with a 45 degree turn and a diagonal run instead of
+a 90 degree turn and a strafe.
+
+Heading drift during a translation is corrected by stopping and rotating, not
+by mixing a correction term into the translation. A blended correction would be
+two motions at once, which is exactly what this model excludes. The machine
+drops back into ALIGN, re-picks the primitive for the new bearing, and resumes.
+
+This is a straight-line primitive with no planner and no costmap: it drives at
+the goal and will hit anything in between. It publishes cmd_vel_nav, the same
+input Nav2's controller_server uses, so the velocity smoother, the collision
+monitor, arbitration and the emergency stop all still apply - but the collision
+monitor only limits speed, it does not route around anything.
 """
 
 import math
 import threading
 
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 
 from mobile_base_interfaces.action import GoToPose
 
-from mobile_base_tools.pose_math import (
-    data_is_stale,
-    normalize_yaw,
-    quaternion_to_yaw,
-)
-
-from nav_msgs.msg import Odometry
+from mobile_base_tools.pose_math import normalize_yaw, quaternion_to_yaw
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.action import ActionClient, ActionServer, CancelResponse
+from rclpy.action import GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+
+import tf2_ros
+from tf2_ros import Buffer, TransformListener
 
 IDLE = 'IDLE'
 ALIGN = 'ALIGN'
@@ -57,8 +70,28 @@ TRANSLATE = 'TRANSLATE'
 ORIENT = 'ORIENT'
 DONE = 'DONE'
 
+QUARTER = math.pi / 2.0
+EIGHTH = math.pi / 4.0
+
+# The eight permitted translation directions, as body-frame angles. Driving
+# along one of these is a single motion; anything between them would need two
+# blended together, which this model does not do.
+PRIMITIVES = (
+    ('FORWARD', 0.0),
+    ('DIAGONAL_FRONT_LEFT', EIGHTH),
+    ('STRAFE_LEFT', QUARTER),
+    ('DIAGONAL_BACK_LEFT', 3.0 * EIGHTH),
+    ('BACKWARD', math.pi),
+    ('DIAGONAL_BACK_RIGHT', -3.0 * EIGHTH),
+    ('STRAFE_RIGHT', -QUARTER),
+    ('DIAGONAL_FRONT_RIGHT', -EIGHTH),
+)
+OFFSETS = dict(PRIMITIVES)
+# Subset used when diagonals are switched off.
+AXIAL_ONLY = ('FORWARD', 'STRAFE_LEFT', 'BACKWARD', 'STRAFE_RIGHT')
+
 # Below this separation the direction to the goal is numerically meaningless,
-# so ALIGN has nothing to point at and is skipped.
+# so there is nothing to align to.
 MIN_ALIGN_DISTANCE = 1e-3
 
 
@@ -68,7 +101,7 @@ def _clamp(value, limit):
 
 
 class Pid:
-    """A PID with integral clamping, usable on a scalar or a 2D vector."""
+    """A PID with integral clamping."""
 
     def __init__(self, kp, ki, kd, integral_limit):
         self._kp = kp
@@ -81,9 +114,9 @@ class Pid:
         """
         Clear the integral and derivative history.
 
-        Called on every state transition. Without it the integral wound up
+        Called on every state transition. Without it, the integral wound up
         while closing one phase's error keeps pushing during the next, which
-        on this controller shows up as an overshoot right after a transition.
+        shows up as an overshoot immediately after a transition.
         """
         self._integral = 0.0
         self._previous = None
@@ -98,11 +131,13 @@ class Pid:
         if self._previous is not None:
             derivative = (error - self._previous) / dt
         self._previous = error
-        return self._kp * error + self._ki * self._integral + self._kd * derivative
+        return (self._kp * error
+                + self._ki * self._integral
+                + self._kd * derivative)
 
 
 class StagedPoseController(Node):
-    """Run the ALIGN, TRANSLATE and ORIENT state machine for one goal."""
+    """Drive to a pose using one motion primitive at a time."""
 
     def __init__(self):
         super().__init__('staged_pose_controller')
@@ -111,81 +146,89 @@ class StagedPoseController(Node):
         self._lock = threading.Lock()
         self._state = IDLE
         self._state_entered = None
-        self._odometry = None
-        self._odometry_time = None
         self._goal = None
-        self._hold_heading = None
+        # The primitive chosen for the current translation and the heading it
+        # requires. Both are recomputed on every entry to ALIGN.
+        self._primitive = None
+        self._target_heading = None
         self._active_handle = None
         self._cancelled = False
-        # Built here as well as per goal, so _tick and _transition are safe
-        # regardless of call order. _execute rebuilds them so a parameter
-        # change between goals takes effect.
+        self._settle_until = 0.0
         self._loops = self._gains()
 
         group = ReentrantCallbackGroup()
+        # Pose comes from TF, not from odometry. Goals arrive in the map
+        # frame, and /odometry/filtered is in the odom frame - the two differ
+        # by AMCL's correction, which grows as the robot drives. Comparing a
+        # map-frame goal against an odom-frame pose silently drives the robot
+        # to the wrong place once that correction becomes non-trivial.
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
         self._commands = self.create_publisher(
             TwistStamped, self.get_parameter('command_topic').value, 10)
-        self.create_subscription(
-            Odometry, self.get_parameter('odometry_topic').value,
-            self._on_odometry, 20, callback_group=group)
         self._server = ActionServer(
             self, GoToPose, 'go_to_pose',
             execute_callback=self._execute,
             goal_callback=self._on_goal_request,
             cancel_callback=self._on_cancel,
             callback_group=group)
+        # RViz's 2D Goal Pose tool publishes here. Accepting it keeps the
+        # click-to-drive workflow working with no bt_navigator present.
+        self._goal_client = ActionClient(
+            self, GoToPose, 'go_to_pose', callback_group=group)
+        self.create_subscription(
+            PoseStamped, self.get_parameter('goal_topic').value,
+            self._on_goal_pose, 1, callback_group=group)
 
         period = 1.0 / float(self.get_parameter('control_frequency').value)
         self.create_timer(period, self._tick, callback_group=group)
         self.get_logger().info(
-            'Staged pose controller ready. Send a goal to '
-            f'{self.get_namespace().rstrip("/")}/go_to_pose'
-        )
+            'Discrete motion controller ready: one primitive at a time. '
+            'Click a goal in RViz, or send one to go_to_pose.')
 
     def _declare_parameters(self):
         """Declare every tunable, with defaults sized to this robot."""
-        # Gains. Defaults are deliberately gentle: the robot's characterised
-        # envelope is 0.10 m/s and 0.30 rad/s, and the downstream smoother
-        # limits acceleration anyway, so there is nothing to gain from
-        # aggressive proportional terms here.
         self.declare_parameter('Kp_align', 1.2)
         self.declare_parameter('Ki_align', 0.0)
         self.declare_parameter('Kd_align', 0.05)
         self.declare_parameter('Kp_translate_pos', 0.9)
         self.declare_parameter('Ki_translate_pos', 0.0)
         self.declare_parameter('Kd_translate_pos', 0.05)
-        # Secondary heading hold during TRANSLATE. A real correction term, not
-        # a zero: mecanum lateral odometry drifts, and without this the robot
-        # slowly yaws while strafing.
-        self.declare_parameter('Kp_translate_heading', 0.8)
         self.declare_parameter('Kp_orient', 1.2)
         self.declare_parameter('Ki_orient', 0.0)
         self.declare_parameter('Kd_orient', 0.05)
 
         self.declare_parameter('angle_tolerance_rad', 0.05)
         self.declare_parameter('position_tolerance_m', 0.05)
-        # Bounds, not targets. Kept inside the MPPI limits the rest of the
-        # stack uses so this controller cannot command anything the other one
-        # would not.
         self.declare_parameter('max_linear_vel', 0.15)
         self.declare_parameter('max_angular_vel', 0.60)
-        # Hysteresis. Tolerance noise around the boundary would otherwise let
-        # the machine flap between phases every tick.
         self.declare_parameter('min_state_dwell_time_s', 0.3)
-        self.declare_parameter('blend_transitions', False)
-        # How far out, in multiples of the tolerance, the next phase starts
-        # ramping in when blending is enabled.
-        self.declare_parameter('blend_window_scale', 3.0)
-        self.declare_parameter('integral_limit', 0.5)
+        # Zero-command hold when the motion type changes, so the downstream
+        # smoother finishes ramping the old motion down before the new one
+        # starts. Must exceed one smoother period (1/20 s) with margin.
+        self.declare_parameter('settle_time_s', 0.4)
 
+        # Include the four diagonals. With this off the robot only drives
+        # along its own axes, which needs more rotation to reach the same goal.
+        self.declare_parameter('use_diagonals', True)
+        # Heading drift that sends the machine back to ALIGN mid-translation.
+        # Larger than angle_tolerance_rad so a run is not abandoned the instant
+        # it leaves perfect alignment. Correcting by rotating is what keeps one
+        # motion at a time true; a blended correction would break it.
+        self.declare_parameter('realign_threshold_rad', 0.15)
+
+        self.declare_parameter('integral_limit', 0.5)
         self.declare_parameter('control_frequency', 20.0)
-        self.declare_parameter('odometry_timeout_s', 0.5)
-        self.declare_parameter('goal_timeout_s', 120.0)
-        # Feeds the same input Nav2's controller_server uses, so the smoother,
-        # collision monitor, mux and e-stop all still apply.
+        self.declare_parameter('goal_timeout_s', 180.0)
         self.declare_parameter('command_topic', 'cmd_vel_nav')
-        self.declare_parameter('odometry_topic', '/odometry/filtered')
+        self.declare_parameter('goal_topic', '/goal_pose')
+        # Goals are expressed in this frame, and the robot's pose is looked up
+        # in it. Must match the frame RViz publishes goals in.
+        self.declare_parameter('goal_frame', 'map')
+        self.declare_parameter('robot_base_frame', 'base_footprint')
         self.declare_parameter('frame_id', 'base_link')
+        # How stale a transform may be before the controller stops.
+        self.declare_parameter('transform_timeout_s', 0.5)
 
     def _gains(self):
         """Build the three loops from the current parameter values."""
@@ -202,25 +245,80 @@ class StagedPoseController(Node):
                 limit),
         )
 
-    def _on_odometry(self, message):
-        """Latch the newest pose and the time it arrived."""
+    def _primitive_set(self):
+        """Return the permitted primitives for the current parameters."""
+        if bool(self.get_parameter('use_diagonals').value):
+            return PRIMITIVES
+        return tuple(p for p in PRIMITIVES if p[0] in AXIAL_ONLY)
+
+    def _choose_primitive(self, bearing, theta):
+        """
+        Pick the primitive whose heading is closest to where the robot points.
+
+        For each candidate direction the robot would have to face
+        `bearing - offset` for the goal to lie exactly along it. Choosing the
+        smallest required turn is what makes the diagonals earn their place.
+        """
+        best = None
+        for name, offset in self._primitive_set():
+            heading = normalize_yaw(bearing - offset)
+            turn = abs(normalize_yaw(heading - theta))
+            if best is None or turn < best[0]:
+                best = (turn, name, offset, heading)
+        return best[1], best[2], best[3]
+
+    def _pose(self):
+        """
+        Return (x, y, yaw) of the robot in the goal frame, or None.
+
+        None means the transform is missing or stale, which the caller must
+        treat as a fault and stop - never as "carry on with the last pose".
+        """
+        goal_frame = str(self.get_parameter('goal_frame').value)
+        base_frame = str(self.get_parameter('robot_base_frame').value)
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                goal_frame, base_frame, rclpy.time.Time())
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException, tf2_ros.TransformException):
+            return None
+        stamp = transform.header.stamp
+        age = self._now() - (stamp.sec + stamp.nanosec / 1e9)
+        timeout = float(self.get_parameter('transform_timeout_s').value)
+        # A zero stamp means the source never filled it in; treat as fresh
+        # rather than as infinitely old, since static transforms do this.
+        if stamp.sec != 0 and age > timeout:
+            return None
         try:
             yaw = quaternion_to_yaw(
-                message.pose.pose.orientation.x,
-                message.pose.pose.orientation.y,
-                message.pose.pose.orientation.z,
-                message.pose.pose.orientation.w,
+                transform.transform.rotation.x,
+                transform.transform.rotation.y,
+                transform.transform.rotation.z,
+                transform.transform.rotation.w,
             )
+        except ValueError:
+            return None
+        return (transform.transform.translation.x,
+                transform.transform.translation.y,
+                yaw)
+
+    def _on_goal_pose(self, message):
+        """Turn an RViz goal click into a goal on this node's own server."""
+        try:
+            yaw = quaternion_to_yaw(
+                message.pose.orientation.x, message.pose.orientation.y,
+                message.pose.orientation.z, message.pose.orientation.w)
         except ValueError as error:
-            self.get_logger().warn(f'Ignoring odometry: {error}')
+            self.get_logger().warn(f'Ignoring goal click: {error}')
             return
-        with self._lock:
-            self._odometry = (
-                message.pose.pose.position.x,
-                message.pose.pose.position.y,
-                yaw,
-            )
-            self._odometry_time = self._now()
+        if not self._goal_client.wait_for_server(timeout_sec=2.0):
+            self.get_logger().error('Own action server is unavailable')
+            return
+        goal = GoToPose.Goal()
+        goal.x = message.pose.position.x
+        goal.y = message.pose.position.y
+        goal.theta_final = yaw
+        self._goal_client.send_goal_async(goal)
 
     def _now(self):
         return self.get_clock().now().nanoseconds / 1e9
@@ -264,6 +362,15 @@ class StagedPoseController(Node):
         previous = self._state
         self._state = state
         self._state_entered = self._now()
+        # Hold zero briefly when the motion type changes. The velocity
+        # smoother ramps between commands, so switching straight from a
+        # translation to a rotation puts a blended twist on the wire for a few
+        # ticks - two motions at once, which is what this model excludes.
+        # Letting the old motion ramp to zero first keeps the rule true at
+        # the wheels and not merely at this node's output.
+        if previous != state and {previous, state} != {IDLE, DONE}:
+            self._settle_until = self._now() + float(
+                self.get_parameter('settle_time_s').value)
         for loop in self._loops:
             loop.reset()
         if previous != state:
@@ -275,27 +382,6 @@ class StagedPoseController(Node):
         return (self._state_entered is not None
                 and self._now() - self._state_entered >= dwell)
 
-    def _blend(self, error, tolerance):
-        """
-        Ramp 0 to 1 as the error closes on its tolerance.
-
-        Returns 1.0 when blending is disabled, so callers can multiply
-        unconditionally. Only used to fade the *next* phase in early; the
-        current phase is never faded out, so the robot is never left
-        uncommanded mid-transition.
-        """
-        if not bool(self.get_parameter('blend_transitions').value):
-            return 0.0
-        scale = float(self.get_parameter('blend_window_scale').value)
-        window = tolerance * max(scale, 1.0)
-        if window <= tolerance:
-            return 0.0
-        if abs(error) >= window:
-            return 0.0
-        if abs(error) <= tolerance:
-            return 1.0
-        return (window - abs(error)) / (window - tolerance)
-
     def _execute(self, goal_handle):
         """Run one goal to completion, cancellation or timeout."""
         request = goal_handle.request
@@ -305,7 +391,8 @@ class StagedPoseController(Node):
                           normalize_yaw(request.theta_final))
             self._active_handle = goal_handle
             self._cancelled = False
-            self._hold_heading = None
+            self._primitive = None
+            self._target_heading = None
         self._transition(ALIGN)
         self.get_logger().info(
             f'Goal ({request.x:.3f}, {request.y:.3f}, '
@@ -353,8 +440,9 @@ class StagedPoseController(Node):
 
     def _fill_errors(self, result):
         """Record how close the robot actually ended up."""
+        pose = self._pose()
         with self._lock:
-            pose, goal = self._odometry, self._goal
+            goal = self._goal
         if pose is None or goal is None:
             result.final_position_error = float('nan')
             result.final_heading_error = float('nan')
@@ -364,22 +452,27 @@ class StagedPoseController(Node):
         result.final_heading_error = abs(normalize_yaw(goal[2] - pose[2]))
 
     def _publish_feedback(self, goal_handle):
+        pose = self._pose()
         with self._lock:
-            pose, goal, state = self._odometry, self._goal, self._state
+            goal = self._goal
+            state, primitive = self._state, self._primitive
+            target = self._target_heading
         if pose is None or goal is None:
             return
         feedback = GoToPose.Feedback()
-        feedback.state = state
+        # The primitive rides in the state string so the caller can see which
+        # of the eight motions is running without a new interface field.
+        feedback.state = (f'{state}[{primitive}]'
+                          if primitive and state in (ALIGN, TRANSLATE)
+                          else state)
         feedback.distance_remaining = math.hypot(
             goal[0] - pose[0], goal[1] - pose[1])
         if state == ORIENT:
             feedback.heading_error = normalize_yaw(goal[2] - pose[2])
-        elif state == TRANSLATE and self._hold_heading is not None:
-            feedback.heading_error = normalize_yaw(
-                self._hold_heading - pose[2])
+        elif target is not None:
+            feedback.heading_error = normalize_yaw(target - pose[2])
         else:
-            feedback.heading_error = normalize_yaw(
-                math.atan2(goal[1] - pose[1], goal[0] - pose[0]) - pose[2])
+            feedback.heading_error = 0.0
         goal_handle.publish_feedback(feedback)
 
     def _finish(self, state):
@@ -388,16 +481,17 @@ class StagedPoseController(Node):
             self._state = state
             self._active_handle = None
             self._goal = None
+            self._primitive = None
+            self._target_heading = None
         self._stop()
 
     def _tick(self):
         """Close the loop once. Everything that commands motion is here."""
         with self._lock:
             state = self._state
-            pose = self._odometry
             goal = self._goal
-            odometry_time = self._odometry_time
             cancelled = self._cancelled
+        pose = self._pose()
 
         if state in (IDLE, DONE) or goal is None:
             return
@@ -405,18 +499,21 @@ class StagedPoseController(Node):
             self._stop()
             return
 
-        timeout = float(self.get_parameter('odometry_timeout_s').value)
-        if pose is None or odometry_time is None or data_is_stale(
-                odometry_time, self._now(), timeout):
-            # A dead odometry source is the one fault that must not coast.
+        if pose is None:
+            # A missing or stale transform is the one fault that must not
+            # coast. Holding the last pose would drive on stale information.
             self.get_logger().warn(
-                'Odometry stale or missing; holding zero.',
+                'Robot pose unavailable or stale; holding zero.',
                 throttle_duration_sec=2.0)
             self._stop()
             return
 
-        rate = float(self.get_parameter('control_frequency').value)
-        dt = 1.0 / rate
+        if self._now() < self._settle_until:
+            # Ramping the previous motion down. Nothing new is commanded yet.
+            self._stop()
+            return
+
+        dt = 1.0 / float(self.get_parameter('control_frequency').value)
         align, position, orient = self._loops
         angle_tolerance = float(self.get_parameter('angle_tolerance_rad').value)
         position_tolerance = float(
@@ -430,49 +527,78 @@ class StagedPoseController(Node):
         distance = math.hypot(dx, dy)
 
         if state == ALIGN:
-            if distance < MIN_ALIGN_DISTANCE:
-                # Already on the goal position; there is no direction to face.
+            if distance <= max(position_tolerance, MIN_ALIGN_DISTANCE):
+                # Already there; there is no direction left to point at.
                 self._transition(ORIENT)
                 self._stop()
                 return
             bearing = math.atan2(dy, dx)
-            error = normalize_yaw(bearing - theta)
+            with self._lock:
+                held = self._primitive
+            if held is None:
+                # New leg: pick the cheapest primitive for this bearing.
+                name, offset, heading = self._choose_primitive(bearing, theta)
+            else:
+                # Mid-leg drift correction. Re-picking here is what made the
+                # robot oscillate: near a 45 degree boundary a small heading
+                # change flips the cheapest choice, so it turned one way,
+                # drifted, flipped, and turned back. Keep the leg's primitive
+                # and rotate to the heading this bearing now needs for it.
+                name = held
+                offset = OFFSETS[name]
+                heading = normalize_yaw(bearing - offset)
+            with self._lock:
+                self._primitive = name
+                self._target_heading = heading
+            error = normalize_yaw(heading - theta)
+            # Pure rotation. No linear terms at all.
             omega = _clamp(align.step(error, dt), max_angular)
-            blend = self._blend(error, angle_tolerance)
-            vx, vy = 0.0, 0.0
-            if blend > 0.0:
-                vx, vy = self._translate_command(
-                    dx, dy, theta, position, dt, max_linear)
-                vx, vy = vx * blend, vy * blend
-            self._publish(vx, vy, omega)
+            self._publish(0.0, 0.0, omega)
             if abs(error) <= angle_tolerance and self._dwelled():
-                with self._lock:
-                    self._hold_heading = bearing
+                self.get_logger().info(
+                    f'Translating {name} ({math.degrees(offset):+.0f} deg in '
+                    f'the body frame), {distance:.3f} m to run')
                 self._transition(TRANSLATE)
             return
 
         if state == TRANSLATE:
-            vx, vy = self._translate_command(
-                dx, dy, theta, position, dt, max_linear)
-            # Secondary heading hold. Without this the base yaws away while
-            # strafing and the "straight line" stops being straight.
-            hold = self._hold_heading if self._hold_heading is not None else theta
-            heading_error = normalize_yaw(hold - theta)
-            gain = float(self.get_parameter('Kp_translate_heading').value)
-            omega = _clamp(gain * heading_error, max_angular)
-            blend = self._blend(distance, position_tolerance)
-            if blend > 0.0:
-                final_error = normalize_yaw(goal_theta - theta)
-                omega += blend * _clamp(
-                    orient.step(final_error, dt), max_angular)
-                omega = _clamp(omega, max_angular)
-            self._publish(vx, vy, omega)
             if distance <= position_tolerance and self._dwelled():
+                with self._lock:
+                    # The leg is finished; the next one picks afresh.
+                    self._primitive = None
+                    self._target_heading = None
                 self._transition(ORIENT)
+                self._stop()
+                return
+            with self._lock:
+                name, target = self._primitive, self._target_heading
+            if target is None or name is None:
+                self._transition(ALIGN)
+                self._stop()
+                return
+            drift = abs(normalize_yaw(target - theta))
+            threshold = float(
+                self.get_parameter('realign_threshold_rad').value)
+            if drift > threshold and self._dwelled():
+                # Correct by rotating, not by mixing omega into the
+                # translation. Re-entering ALIGN also re-picks the primitive
+                # for the bearing from wherever the robot has actually got to.
+                self.get_logger().info(
+                    f'Heading drifted {drift:.3f} rad; re-aligning')
+                self._transition(ALIGN)
+                self._stop()
+                return
+            offset = OFFSETS[name]
+            # One primitive only: the direction is fixed, and the PID sets how
+            # fast to run along it so the robot decelerates into the goal.
+            speed = _clamp(position.step(distance, dt), max_linear)
+            self._publish(
+                speed * math.cos(offset), speed * math.sin(offset), 0.0)
             return
 
         if state == ORIENT:
             error = normalize_yaw(goal_theta - theta)
+            # Pure rotation. No linear terms at all.
             omega = _clamp(orient.step(error, dt), max_angular)
             self._publish(0.0, 0.0, omega)
             if abs(error) <= angle_tolerance and self._dwelled():
@@ -480,24 +606,9 @@ class StagedPoseController(Node):
                 self._stop()
             return
 
-    def _translate_command(self, dx, dy, theta, loop, dt, max_linear):
-        """Rotate the world-frame error into the body frame and run the PID."""
-        cos_t, sin_t = math.cos(theta), math.sin(theta)
-        error_x = cos_t * dx + sin_t * dy
-        error_y = -sin_t * dx + cos_t * dy
-        magnitude = math.hypot(error_x, error_y)
-        if magnitude <= 0.0:
-            return 0.0, 0.0
-        # One position PID on the error magnitude, applied along the body-frame
-        # direction, so both axes share a single integral and a single speed
-        # limit rather than two loops fighting over one budget.
-        speed = loop.step(magnitude, dt)
-        speed = max(-max_linear, min(max_linear, speed))
-        return speed * error_x / magnitude, speed * error_y / magnitude
-
 
 def main(args=None):
-    """Run the staged pose controller."""
+    """Run the discrete motion controller."""
     rclpy.init(args=args)
     node = StagedPoseController()
     executor = MultiThreadedExecutor()

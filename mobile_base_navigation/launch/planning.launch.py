@@ -83,9 +83,13 @@ def generate_launch_description():
         #   ros2 service call /lifecycle_manager_navigation/manage_nodes \
         #     nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
         DeclareLaunchArgument('autostart', default_value='true'),
+        # The discrete single-primitive model is the default. Nav2's MPPI
+        # blends vx, vy and omega together, which is exactly what this motion
+        # model excludes, so it is opt-in only: controller:=nav2 brings back
+        # path planning and obstacle avoidance.
         DeclareLaunchArgument(
-            'controller', default_value='nav2',
-            description='Local controller: nav2 or staged.'),
+            'controller', default_value='staged',
+            description='Local controller: staged (discrete) or nav2.'),
         DeclareLaunchArgument(
             'staged_controller_config',
             default_value=PathJoinSubstitution([

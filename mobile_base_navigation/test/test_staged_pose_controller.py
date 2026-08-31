@@ -27,11 +27,12 @@ import sys
 import threading
 import time
 
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import TransformStamped, TwistStamped
 
 from mobile_base_interfaces.action import GoToPose
 
 from nav_msgs.msg import Odometry
+
 
 import rclpy
 from rclpy.action import ActionClient
@@ -42,10 +43,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
 
 from staged_pose_controller import (  # noqa: E402
     ALIGN,
+    OFFSETS,
     ORIENT,
     StagedPoseController,
     TRANSLATE,
 )
+
+from tf2_ros import TransformBroadcaster  # noqa: E402
 
 RATE = 50.0
 
@@ -61,6 +65,8 @@ class FakeRobot(Node):
             TwistStamped, 'cmd_vel_nav', self._on_command, 20)
         self._odometry = self.create_publisher(
             Odometry, '/odometry/filtered', 20)
+        # The controller takes its pose from TF, in the goal frame.
+        self._tf = TransformBroadcaster(self)
         self._last = None
         self.paused = False
         self.create_timer(1.0 / RATE, self._publish)
@@ -92,6 +98,17 @@ class FakeRobot(Node):
         message.pose.pose.orientation.z = math.sin(self.theta / 2.0)
         message.pose.pose.orientation.w = math.cos(self.theta / 2.0)
         self._odometry.publish(message)
+        if self.paused:
+            return
+        transform = TransformStamped()
+        transform.header.stamp = message.header.stamp
+        transform.header.frame_id = 'map'
+        transform.child_frame_id = 'base_footprint'
+        transform.transform.translation.x = self.x
+        transform.transform.translation.y = self.y
+        transform.transform.rotation.z = math.sin(self.theta / 2.0)
+        transform.transform.rotation.w = math.cos(self.theta / 2.0)
+        self._tf.sendTransform(transform)
 
 
 class Watcher(Node):
@@ -161,29 +178,35 @@ def _run(goal_x, goal_y, goal_theta, timeout=90.0):
     return watcher.states, result, robot, per_state
 
 
-def test_state_sequence_and_heading_hold():
-    """IDLE->ALIGN->TRANSLATE->ORIENT->DONE, and omega stays small mid-phase."""
+def test_state_sequence_and_primitive_selection():
+    """ALIGN -> TRANSLATE -> ORIENT, using a diagonal for a diagonal goal."""
     states, result, robot, per_state = _run(1.0, 1.0, math.pi / 2.0)
 
-    # Feedback only starts once the goal is executing, so IDLE is not
-    # necessarily observed. What matters is that the driving phases each
-    # appear exactly once, in order - a repeat would mean the dwell
-    # hysteresis failed to stop the machine flapping at a tolerance boundary.
+    # Feedback carries the primitive as "STATE[PRIMITIVE]", so compare on the
+    # base state. Feedback only starts once the goal is executing, so IDLE is
+    # not necessarily observed; what matters is that the driving phases each
+    # appear once, in order. A repeat would mean the dwell hysteresis failed
+    # to stop the machine flapping at a tolerance boundary.
     phases = ('ALIGN', 'TRANSLATE', 'ORIENT')
-    driving = [state for state in states if state in phases]
+    driving = []
+    for state in (s.split('[')[0] for s in states):
+        if state in phases and (not driving or driving[-1] != state):
+            driving.append(state)
     assert driving == list(phases), states
+
+    # The goal sits 45 degrees off a robot facing +x, so the cheapest
+    # primitive is the front-left diagonal and it needs no rotation at all.
+    # This is the end-to-end evidence that diagonals are genuinely used.
+    assert any('DIAGONAL_FRONT_LEFT' in state for state in states), states
 
     assert result is not None and result.success, result
     assert result.final_position_error < 0.10, result.final_position_error
     assert result.final_heading_error < 0.10, result.final_heading_error
 
-    # During TRANSLATE the heading is held, not driven: the secondary loop
-    # should only ever be trimming, never commanding a real rotation.
+    # One motion at a time: the translation carries no rotation whatsoever.
     translating = per_state.get('TRANSLATE', [])
     assert translating, 'never observed a TRANSLATE command'
-    worst = max(abs(omega) for _, _, omega in translating)
-    assert worst < 0.10, f'heading hold drifted, max |omega| = {worst}'
-    # ...and it must actually be translating while it does so.
+    assert all(omega == 0.0 for _, _, omega in translating), translating[:5]
     fastest = max(math.hypot(vx, vy) for vx, vy, _ in translating)
     assert fastest > 0.01, 'TRANSLATE never commanded linear motion'
 
@@ -202,7 +225,12 @@ class Recorder:
         ))
 
 
-def _tick_once(state, pose, goal, hold_heading=None):
+def normalize(angle):
+    """Wrap to [-pi, pi]; a local copy keeps this test self-contained."""
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _tick_once(state, pose, goal, primitive=None, target_heading=None):
     """
     Run exactly one control tick in a known state and return the command.
 
@@ -214,10 +242,12 @@ def _tick_once(state, pose, goal, hold_heading=None):
     controller = StagedPoseController()
     recorder = Recorder()
     controller._commands = recorder
-    controller._odometry = pose
-    controller._odometry_time = controller._now()
+    # Stub the TF lookup rather than standing up a broadcaster: this keeps the
+    # per-phase checks deterministic and free of graph timing.
+    controller._pose = lambda: pose
     controller._goal = goal
-    controller._hold_heading = hold_heading
+    controller._primitive = primitive
+    controller._target_heading = target_heading
     controller._state = state
     controller._state_entered = controller._now()
     controller._tick()
@@ -228,11 +258,15 @@ def _tick_once(state, pose, goal, hold_heading=None):
 
 def test_align_commands_no_linear_motion():
     """ALIGN rotates in place: vx and vy are exactly zero."""
-    sent = _tick_once(ALIGN, (0.0, 0.0, 0.0), (1.0, 1.0, 0.0))
+    # Bearing 0.3 rad is nearest FORWARD, so a real turn is required. A goal
+    # at exactly 45 degrees would need no rotation at all - the front-left
+    # diagonal already points straight at it - which is the point of the
+    # model but makes for a poor rotation test.
+    sent = _tick_once(ALIGN, (0.0, 0.0, 0.0),
+                      (math.cos(0.3), math.sin(0.3), 0.0))
     assert sent, 'ALIGN published nothing'
     vx, vy, omega = sent[-1]
     assert (vx, vy) == (0.0, 0.0), sent[-1]
-    # The goal is at 45 degrees, so it must actually be turning toward it.
     assert omega > 0.0, sent[-1]
 
 
@@ -245,44 +279,115 @@ def test_orient_commands_no_linear_motion():
     assert omega > 0.0, sent[-1]
 
 
-def test_translate_error_is_rotated_into_the_body_frame():
-    """A goal to the robot's left becomes +vy, not +vx."""
-    # Robot at the origin facing +x; goal one metre to its left (+y world).
-    sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.0), (0.0, 1.0, 0.0),
-                      hold_heading=0.0)
-    vx, vy, _ = sent[-1]
-    assert abs(vx) < 1e-6, sent[-1]
-    assert vy > 0.0, sent[-1]
+def test_translate_never_rotates():
+    """
+    A translation is a pure translation.
 
-    # Same goal, robot rotated 90 degrees left: now it is straight ahead.
-    sent = _tick_once(TRANSLATE, (0.0, 0.0, math.pi / 2.0), (0.0, 1.0, 0.0),
-                      hold_heading=math.pi / 2.0)
-    vx, vy, _ = sent[-1]
-    assert vx > 0.0, sent[-1]
-    assert abs(vy) < 1e-6, sent[-1]
+    The previous model held heading with a live omega term during the run.
+    That is two motions at once, which this model excludes: drift is corrected
+    by dropping back into a rotate-only phase instead.
+    """
+    for primitive in ('FORWARD', 'STRAFE_LEFT', 'DIAGONAL_FRONT_LEFT'):
+        sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.1), (2.0, 0.0, 0.0),
+                          primitive=primitive, target_heading=0.0)
+        assert sent[-1][2] == 0.0, (primitive, sent[-1])
 
 
-def test_translate_heading_hold_corrects_drift():
-    """The secondary loop opposes yaw drift rather than ignoring it."""
-    # Held heading is 0, but the robot has drifted +0.2 rad: expect -omega.
-    sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.2), (1.0, 0.0, 0.0),
-                      hold_heading=0.0)
-    assert sent[-1][2] < 0.0, sent[-1]
-    sent = _tick_once(TRANSLATE, (0.0, 0.0, -0.2), (1.0, 0.0, 0.0),
-                      hold_heading=0.0)
-    assert sent[-1][2] > 0.0, sent[-1]
+def test_each_primitive_commands_only_its_own_motion():
+    """Each of the eight directions produces exactly the axes it should."""
+    checks = {
+        'FORWARD': lambda vx, vy: vx > 0 and abs(vy) < 1e-9,
+        'BACKWARD': lambda vx, vy: vx < 0 and abs(vy) < 1e-9,
+        'STRAFE_LEFT': lambda vx, vy: abs(vx) < 1e-9 and vy > 0,
+        'STRAFE_RIGHT': lambda vx, vy: abs(vx) < 1e-9 and vy < 0,
+    }
+    for name, ok in checks.items():
+        sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0),
+                          primitive=name, target_heading=0.0)
+        vx, vy, omega = sent[-1]
+        assert ok(vx, vy), (name, sent[-1])
+        assert omega == 0.0, (name, sent[-1])
+
+
+def test_diagonals_are_true_diagonals():
+    """|vx| equals |vy| on a diagonal - not a forward run with strafe mixed in."""
+    diagonals = {
+        'DIAGONAL_FRONT_LEFT': (1, 1),
+        'DIAGONAL_FRONT_RIGHT': (1, -1),
+        'DIAGONAL_BACK_LEFT': (-1, 1),
+        'DIAGONAL_BACK_RIGHT': (-1, -1),
+    }
+    for name, (sx, sy) in diagonals.items():
+        sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.0), (5.0, 0.0, 0.0),
+                          primitive=name, target_heading=0.0)
+        vx, vy, omega = sent[-1]
+        assert abs(abs(vx) - abs(vy)) < 1e-9, (name, sent[-1])
+        assert vx * sx > 0.0 and vy * sy > 0.0, (name, sent[-1])
+        assert omega == 0.0, (name, sent[-1])
+
+
+def test_primitive_chosen_needs_the_least_rotation():
+    """A goal off the shoulder is a diagonal run, not a square-up and strafe."""
+    rclpy.init()
+    controller = StagedPoseController()
+    try:
+        # Robot faces +x. Goal at 45 degrees to its left: driving diagonally
+        # needs no rotation at all, where forward would need 45 degrees.
+        name, offset, heading = controller._choose_primitive(
+            math.pi / 4.0, 0.0)
+        assert name == 'DIAGONAL_FRONT_LEFT', name
+        assert abs(normalize(heading - 0.0)) < 1e-9, heading
+
+        # Goal straight ahead: forward, no rotation.
+        name, _, _ = controller._choose_primitive(0.0, 0.0)
+        assert name == 'FORWARD', name
+
+        # Goal directly to the left: strafing needs no rotation.
+        name, _, _ = controller._choose_primitive(math.pi / 2.0, 0.0)
+        assert name == 'STRAFE_LEFT', name
+
+        # Goal behind: backward, rather than a 180 degree turn.
+        name, _, _ = controller._choose_primitive(math.pi, 0.0)
+        assert name == 'BACKWARD', name
+
+        # Every choice must need at most half the 45 degree spacing.
+        for bearing in [i * 0.17 for i in range(-20, 21)]:
+            _, _, heading = controller._choose_primitive(bearing, 0.3)
+            assert abs(normalize(heading - 0.3)) <= math.pi / 8.0 + 1e-9
+    finally:
+        controller.destroy_node()
+        rclpy.shutdown()
+
+
+def test_diagonals_can_be_switched_off():
+    """With use_diagonals false only the four axial motions are offered."""
+    rclpy.init()
+    controller = StagedPoseController()
+    try:
+        controller.set_parameters(
+            [rclpy.parameter.Parameter(
+                'use_diagonals', rclpy.Parameter.Type.BOOL, False)])
+        names = {name for name, _ in controller._primitive_set()}
+        assert names == {'FORWARD', 'BACKWARD', 'STRAFE_LEFT',
+                         'STRAFE_RIGHT'}, names
+        name, _, _ = controller._choose_primitive(math.pi / 4.0, 0.0)
+        assert name in ('FORWARD', 'STRAFE_LEFT'), name
+    finally:
+        controller.destroy_node()
+        rclpy.shutdown()
 
 
 def test_commands_are_clamped_to_the_limits():
     """A far goal must not command more than max_linear_vel."""
-    sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.0), (100.0, 0.0, 0.0),
-                      hold_heading=0.0)
-    vx, vy, _ = sent[-1]
-    assert math.hypot(vx, vy) <= 0.15 + 1e-9, sent[-1]
+    for name in OFFSETS:
+        sent = _tick_once(TRANSLATE, (0.0, 0.0, 0.0), (100.0, 0.0, 0.0),
+                          primitive=name, target_heading=0.0)
+        vx, vy, _ = sent[-1]
+        assert math.hypot(vx, vy) <= 0.15 + 1e-9, (name, sent[-1])
 
 
-def test_stops_when_odometry_goes_stale():
-    """A dead odometry source must hold zero, not coast on the last command."""
+def test_stops_when_pose_becomes_unavailable():
+    """A missing transform must hold zero, not coast on the last command."""
     rclpy.init()
     controller = StagedPoseController()
     robot = FakeRobot()
@@ -297,10 +402,10 @@ def test_stops_when_odometry_goes_stale():
     controller._goal = (2.0, 0.0, 0.0)
     controller._transition(ALIGN)
     time.sleep(0.5)
-    # The fake must stop publishing, or _on_odometry refreshes the timestamp
-    # 20 ms later and the source is never actually stale.
+    # The fake must stop broadcasting, or the transform is refreshed 20 ms
+    # later and the pose is never actually unavailable.
     robot.paused = True
-    time.sleep(1.0)
+    time.sleep(1.5)
     robot.commands.clear()
     time.sleep(0.5)
 
