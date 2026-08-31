@@ -26,7 +26,7 @@ jobs:
           mkdir -p /tmp/mobile_base_ws/src
           ln -s "$GITHUB_WORKSPACE" /tmp/mobile_base_ws/src/mobile_base
 
-      - name: Build all seven packages
+      - name: Build all eight packages
         working-directory: /tmp/mobile_base_ws
         shell: bash
         run: |
@@ -34,7 +34,7 @@ jobs:
           colcon build --symlink-install --packages-select \
             mobile_base_description mobile_base_gazebo mobile_base_localization \
             mobile_base_evaluation mobile_base_tools mobile_base_bringup \
-            mobile_base_navigation
+            mobile_base_navigation mobile_base_interfaces
 
       - name: Run deterministic package tests
         working-directory: /tmp/mobile_base_ws
@@ -45,7 +45,7 @@ jobs:
           colcon test --event-handlers console_cohesion+ --packages-select \
             mobile_base_description mobile_base_gazebo mobile_base_localization \
             mobile_base_evaluation mobile_base_tools mobile_base_bringup \
-            mobile_base_navigation \
+            mobile_base_navigation mobile_base_interfaces \
             --ctest-args -E \
             'test_test_sensor_topics.py|test_test_odometry_evaluation_runtime.py'
           colcon test-result --verbose

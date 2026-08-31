@@ -1,0 +1,57 @@
+# Staged holonomic pose controller: ALIGN, then TRANSLATE, then ORIENT.
+#
+# This is a straight-line primitive with no planner and no costmap. It drives
+# at the goal and will hit anything in between. It publishes cmd_vel_nav, the
+# same input Nav2's controller_server uses, so the velocity smoother, the
+# collision monitor, twist_mux and the e-stop all still apply - but the
+# collision monitor only slows and limits, it does not route around anything.
+staged_pose_controller:
+  ros__parameters:
+    # Phase 1: rotate in place to face the goal.
+    Kp_align: 1.2
+    Ki_align: 0.0
+    Kd_align: 0.05
+
+    # Phase 2: translate, with the position error rotated into the body frame
+    # before the gains are applied.
+    Kp_translate_pos: 0.9
+    Ki_translate_pos: 0.0
+    Kd_translate_pos: 0.05
+    # Secondary heading hold during phase 2. A real correction term, not a
+    # zero: mecanum lateral odometry is the least accurate axis on this base,
+    # so without this the robot yaws away while strafing and the straight line
+    # stops being straight.
+    Kp_translate_heading: 0.8
+
+    # Phase 3: rotate in place to the requested final orientation.
+    Kp_orient: 1.2
+    Ki_orient: 0.0
+    Kd_orient: 0.05
+
+    angle_tolerance_rad: 0.05
+    position_tolerance_m: 0.05
+
+    # Bounds, not targets, and kept inside the limits MPPI uses so this
+    # controller cannot command anything the other one would not.
+    max_linear_vel: 0.15
+    max_angular_vel: 0.60
+
+    # Hysteresis. Without a dwell, tolerance noise around the boundary lets
+    # the machine flap between phases every tick.
+    min_state_dwell_time_s: 0.3
+
+    # Ramp the next phase in near the tolerance boundary instead of a hard
+    # stop-start switch. Off by default: the hard switch is what makes each
+    # phase separately observable, which is the point of staging.
+    blend_transitions: false
+    blend_window_scale: 3.0
+
+    integral_limit: 0.5
+    control_frequency: 20.0
+    # A dead odometry source is the one fault that must not coast.
+    odometry_timeout_s: 0.5
+    goal_timeout_s: 120.0
+
+    command_topic: cmd_vel_nav
+    odometry_topic: /odometry/filtered
+    frame_id: base_link

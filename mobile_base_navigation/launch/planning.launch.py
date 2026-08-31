@@ -22,7 +22,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -42,6 +46,22 @@ def generate_launch_description():
         'localization.launch.py',
     ])
     use_sim_time = {'use_sim_time': True}
+    # Which local controller drives. They are mutually exclusive because both
+    # publish cmd_vel_nav: two publishers on one input and the mux forwards
+    # whichever arrived last. "nav2" plans and avoids obstacles; "staged" is a
+    # straight-line ALIGN/TRANSLATE/ORIENT primitive with neither.
+    use_nav2 = PythonExpression(
+        ["'", LaunchConfiguration('controller'), "'.lower() != 'staged'"])
+    use_staged = PythonExpression(
+        ["'", LaunchConfiguration('controller'), "'.lower() == 'staged'"])
+    # planner_server stays in both modes: the staged controller does not use
+    # it, but /plan remains available for previewing routes in RViz.
+    nav2_lifecycle_nodes = [
+        'planner_server', 'velocity_smoother', 'collision_monitor',
+    ]
+    goal_execution_nodes = [
+        'controller_server', 'behavior_server', 'bt_navigator',
+    ]
     # nav2_util's TwistSubscriber and TwistPublisher share this one node-level
     # parameter, so each node is stamped on both sides or neither and every hop
     # in the chain has to agree. The controller's reference interface is
@@ -63,6 +83,15 @@ def generate_launch_description():
         #   ros2 service call /lifecycle_manager_navigation/manage_nodes \
         #     nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
         DeclareLaunchArgument('autostart', default_value='true'),
+        DeclareLaunchArgument(
+            'controller', default_value='nav2',
+            description='Local controller: nav2 or staged.'),
+        DeclareLaunchArgument(
+            'staged_controller_config',
+            default_value=PathJoinSubstitution([
+                share, 'config', 'staged_pose_controller.yaml',
+            ]),
+        ),
         DeclareLaunchArgument(
             'planner_config',
             default_value=PathJoinSubstitution([
@@ -180,6 +209,7 @@ def generate_launch_description():
                 stamped_cmd_vel,
             ],
             remappings=[('cmd_vel', 'cmd_vel_nav')],
+            condition=IfCondition(use_nav2),
             output='screen',
         ),
         Node(
@@ -192,6 +222,7 @@ def generate_launch_description():
                 stamped_cmd_vel,
             ],
             remappings=[('cmd_vel', 'cmd_vel_nav')],
+            condition=IfCondition(use_nav2),
             output='screen',
         ),
         Node(
@@ -204,6 +235,7 @@ def generate_launch_description():
                 {'default_nav_to_pose_bt_xml': LaunchConfiguration(
                     'bt_xml')},
             ],
+            condition=IfCondition(use_nav2),
             output='screen',
         ),
         # Limits, then the collision gate, then arbitration last.
@@ -237,6 +269,20 @@ def generate_launch_description():
                 LaunchConfiguration('collision_monitor_config'),
                 use_sim_time,
             ],
+            output='screen',
+        ),
+        # The staged alternative. It publishes the same cmd_vel_nav that
+        # controller_server would, so it inherits the smoother, the collision
+        # monitor, arbitration and the e-stop rather than reaching the wheels.
+        Node(
+            package='mobile_base_navigation',
+            executable='staged_pose_controller',
+            name='staged_pose_controller',
+            parameters=[
+                LaunchConfiguration('staged_controller_config'),
+                use_sim_time,
+            ],
+            condition=IfCondition(use_staged),
             output='screen',
         ),
         # Holds the twist_mux lock. It publishes a Bool heartbeat, so if this
@@ -275,14 +321,9 @@ def generate_launch_description():
                 'use_sim_time': True,
                 'autostart': ParameterValue(
                     LaunchConfiguration('autostart'), value_type=bool),
-                'node_names': [
-                    'controller_server',
-                    'planner_server',
-                    'behavior_server',
-                    'bt_navigator',
-                    'velocity_smoother',
-                    'collision_monitor',
-                ],
+                # Only the servers this mode actually starts. Listing an
+                # absent node makes the manager wait for it forever.
+                'node_names': nav2_lifecycle_nodes + goal_execution_nodes,
                 # Bond heartbeats are unreliable under sim time: a server
                 # activates normally but is never reached by bond, and the
                 # manager then reports a spurious bringup failure. 0.0
@@ -290,6 +331,28 @@ def generate_launch_description():
                 # simulation. The harness, on wall time, keeps 4.0 s.
                 'bond_timeout': 0.0,
             }],
+            condition=IfCondition(use_nav2),
+            output='screen',
+        ),
+        Node(
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_navigation',
+            parameters=[{
+                'use_sim_time': True,
+                'autostart': ParameterValue(
+                    LaunchConfiguration('autostart'), value_type=bool),
+                # Only the servers this mode actually starts. Listing an
+                # absent node makes the manager wait for it forever.
+                'node_names': nav2_lifecycle_nodes,
+                # Bond heartbeats are unreliable under sim time: a server
+                # activates normally but is never reached by bond, and the
+                # manager then reports a spurious bringup failure. 0.0
+                # disables the bond check, which is what Nav2 itself does in
+                # simulation. The harness, on wall time, keeps 4.0 s.
+                'bond_timeout': 0.0,
+            }],
+            condition=IfCondition(use_staged),
             output='screen',
         ),
         Node(

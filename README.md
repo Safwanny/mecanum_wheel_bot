@@ -11,6 +11,7 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 | `mobile_base_bringup` | ros2_control configuration and top-level launch files |
 | `mobile_base_localization` | Planar EKF, SLAM Toolbox mapping, Nav2 map serving, and holonomic AMCL |
 | `mobile_base_navigation` | Costmaps, planning, control, behavior tree, command arbitration and e-stop |
+| `mobile_base_interfaces` | Action and message definitions for the mobile base |
 | `mobile_base_evaluation` | Evaluation-only, identity-selected Gazebo ground truth |
 | `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
 
@@ -626,6 +627,127 @@ changed the closest observed obstacle distance by **0.01 m**. The footprint is
 circular, so rotating sweeps nothing beyond the radius it already occupies —
 which is why the stock warning about surprise rotations, written for
 rectangular and legged bases, does not apply here.
+
+### Staged pose controller (alternative to Nav2's controller)
+
+An alternative local controller that drives to a pose in three explicit phases
+instead of blending every axis at once. Run it with `controller:=staged`:
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py controller:=staged world:=navigation_basic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Goals go to an action server rather than the RViz goal tool, so feedback and
+cancellation come for free:
+
+```bash
+ros2 action send_goal --feedback /go_to_pose mobile_base_interfaces/action/GoToPose "{x: 1.5, y: 0.5, theta_final: 1.57}"
+```
+
+**It has no planner and no costmap.** It drives straight at the goal and will
+hit anything in between. The collision monitor still limits its speed near
+obstacles and the e-stop still stops it, but neither routes around anything.
+Use `controller:=nav2` (the default) for obstacle avoidance.
+
+#### The state machine
+
+| State | Commands | Leaves when |
+| --- | --- | --- |
+| `IDLE` | zero twist | a goal is accepted |
+| `ALIGN` | `omega` only, `vx = vy = 0` | heading is within `angle_tolerance_rad` of `atan2(dy, dx)` |
+| `TRANSLATE` | `vx`, `vy`, plus a heading-hold `omega` | distance is within `position_tolerance_m` |
+| `ORIENT` | `omega` only, `vx = vy = 0` | heading is within `angle_tolerance_rad` of `theta_final` |
+| `DONE` | zero twist | a new goal arrives |
+
+Every transition also requires `min_state_dwell_time_s` to have elapsed. Without
+that hysteresis, noise around a tolerance boundary makes the machine flap
+between phases every tick.
+
+Three things worth knowing about the control:
+
+- **Position error is rotated into the body frame before the gains see it.** One
+  PID runs on the error *magnitude* and its output is applied along the
+  body-frame direction, so both axes share a single integral and a single speed
+  limit rather than two loops competing for one budget.
+- **`TRANSLATE` holds heading with a real correction term**, not by commanding
+  `omega = 0`. Lateral odometry is this base's least accurate axis, so without
+  the hold it yaws away while strafing and the straight line stops being
+  straight.
+- **Every integral resets on transition.** Windup accumulated closing one
+  phase's error would otherwise keep pushing through the next, which shows up
+  as an overshoot immediately after a transition.
+
+If odometry goes stale beyond `odometry_timeout_s` the controller holds zero
+rather than coasting on its last command. That is the one fault that must not
+carry on driving.
+
+#### Parameters
+
+Gains: `Kp_align` / `Ki_align` / `Kd_align`, `Kp_translate_pos` /
+`Ki_translate_pos` / `Kd_translate_pos`, `Kp_translate_heading` (the secondary
+hold), `Kp_orient` / `Ki_orient` / `Kd_orient`.
+
+Behaviour: `angle_tolerance_rad`, `position_tolerance_m`, `max_linear_vel`,
+`max_angular_vel`, `min_state_dwell_time_s`, `integral_limit`,
+`control_frequency`, `odometry_timeout_s`, `goal_timeout_s`.
+
+Topics: `command_topic` (default `cmd_vel_nav`), `odometry_topic` (default
+`/odometry/filtered`), `frame_id`.
+
+`blend_transitions` (default `false`) ramps the next phase's command in as the
+error closes on its tolerance, over a window of `blend_window_scale` multiples
+of that tolerance, instead of a hard stop-start switch. It is off by default
+because the hard switch is what makes each phase separately observable, which
+is the point of staging. Defaults live in
+[`config/staged_pose_controller.yaml`](mobile_base_navigation/config/staged_pose_controller.yaml).
+
+#### Why it publishes `cmd_vel_nav`
+
+It feeds the same input Nav2's `controller_server` uses, so it inherits the
+velocity smoother, the collision monitor, arbitration and the emergency stop.
+Publishing to `/mobile_base_controller/reference` directly would reach the
+wheels but bypass all four — and the single-arbiter test would fail.
+
+That sharing is also why the two controllers are mutually exclusive: two
+publishers on `cmd_vel_nav` and the mux forwards whichever arrived last.
+`controller:=staged` starts this node and leaves `controller_server`,
+`behavior_server` and `bt_navigator` out of the lifecycle manager.
+
+#### Testing it
+
+Unit and integration tests run without Gazebo, on their own ROS domain:
+
+```bash
+colcon test --packages-select mobile_base_navigation --ctest-args -R test_staged_pose_controller
+```
+
+They drive the node with a fake robot that *integrates the twists it publishes*,
+so the loop is genuinely closed rather than fed a scripted pose that would
+arrive regardless of what was commanded. The sequence test asserts each phase is
+entered exactly once, in order, and that `omega` stays trimming-small during
+`TRANSLATE`.
+
+Manually, in the simulator: launch with `controller:=staged`, set the initial
+pose in RViz, clear the e-stop, then send a goal with the action call above and
+watch the phases in the terminal. `--feedback` prints the state as it changes.
+
+The same AMCL activation race applies here as in `nav2` mode, and it is easy to
+misread: if the pose is set late the lifecycle manager gives up, the velocity
+smoother and collision monitor stay `inactive`, and the controller then cycles
+in `ALIGN` and times out. It looks like a control-loop failure and is not — the
+chain downstream of `cmd_vel_nav` is simply not running. Re-trigger bringup with
+the `manage_nodes` call above and send the goal again.
+
+A verified run, robot at the origin, goal `(1.2, 0.8, 1.571)`:
+
+```text
+  -> ALIGN      (dist 1.442 m)
+  -> TRANSLATE  (dist 1.442 m)
+  -> ORIENT     (dist 0.048 m)
+success=True  "goal reached"
+  final position error : 0.041 m
+  final heading error  : 0.047 rad
+```
 
 ### Phase 3 tuning and limitations
 
@@ -1402,7 +1524,7 @@ anisotropic contact parameters for the selected Gazebo physics engine.
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` builds all seven packages on ROS 2 Jazzy and runs the
+`.github/workflows/ci.yaml` builds all eight packages on ROS 2 Jazzy and runs the
 deterministic unit, lint, Xacro/URDF, configuration, Python compilation, and
 whitespace checks. Gazebo launch tests and the formal campaign stay out of
 normal pull-request CI; they remain explicit runtime validation on a stable

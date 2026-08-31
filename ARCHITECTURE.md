@@ -16,6 +16,7 @@ through a single arbiter behind a latching emergency stop.
 | `mobile_base_bringup` | Top-level simulation, mapping, localization, and evaluation launches; generated SDF |
 | `mobile_base_localization` | EKF, SLAM Toolbox, map server, and AMCL |
 | `mobile_base_navigation` | Costmaps, planner, controller, behavior tree, command arbitration and e-stop |
+| `mobile_base_interfaces` | Action and message definitions for the mobile base |
 | `mobile_base_evaluation` | Evaluation-only Gazebo ground-truth selection |
 | `mobile_base_tools` | Motion profiles, trajectory recording, diagnostics, reports, and process isolation |
 
