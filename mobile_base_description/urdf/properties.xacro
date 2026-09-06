@@ -4,9 +4,15 @@
   <!-- chassis_* is the body bounding box: the footprint of both deck plates
        and the full height from lower deck underside to upper deck top. It is
        what the single collision box and the Nav2 footprint are derived from. -->
-  <xacro:property name="chassis_length" value="0.216"/>
+  <!-- chassis_length is the bumper-to-bumper span: the decks reach past the
+       wheels front and rear so the body takes a knock before a wheel does.
+       Ceiling is 0.250. Past that the spine corner overtakes the wheel
+       envelope as the circumscribed radius and Nav2's robot_radius (0.14 in
+       planner.yaml and local_costmap.yaml) no longer covers the body. -->
+  <xacro:property name="chassis_length" value="0.240"/>
+  <!-- Spine width. The decks also carry side wings out to the wheel outer
+       faces; chassis_overall_width below is the true widest point. -->
   <xacro:property name="chassis_width" value="0.100"/>
-  <xacro:property name="chassis_mass" value="1.80"/>
 
   <!-- Dual-deck plates. The decks are 3D-printed sheet, not a solid block, so
        the body is modelled as visuals on base_link plus one bounding collision.
@@ -35,9 +41,10 @@
        outboard of it slots into the wheel hub. -->
   <xacro:property name="motor_body_outer" value="0.00755"/>
   <!-- Fixed-joint children are lumped into base_link by the Gazebo URDF
-       reduction, so the motors carry negligible inertia and chassis_mass
-       remains the whole-body mass of the validated motion model. -->
-  <xacro:property name="motor_mass" value="1.0e-6"/>
+       reduction with parallel-axis terms, so each carries its real mass and
+       the composite body inertia falls out of the reduction. The deck plates
+       absorb the balance, holding the lumped total at total_body_mass. -->
+  <xacro:property name="motor_mass" value="0.030"/>
 
   <!-- Corner standoffs between the decks. Visual only. -->
   <xacro:property name="standoff_radius" value="0.004"/>
@@ -57,6 +64,30 @@
   <xacro:property name="wheelbase" value="0.150"/>
   <xacro:property name="wheel_separation" value="0.134"/>
   <xacro:property name="wheel_diameter" value="${2.0 * wheel_radius}"/>
+
+  <!-- Deck cross section, in plan view. Each deck is a full-length spine at
+       chassis_width, plus a wing on each side filling the open space between
+       the front and rear wheel of that side. The wings butt against the spine
+       edges rather than overlapping them: coplanar faces z-fight in RViz.
+
+       The wings reach out to the wheel outer faces and stop short of the
+       wheels in X, so they add deck area without ever fouling a rotating
+       wheel. Every bound below is derived from the wheel geometry, so moving
+       a wheel moves the wings with it. -->
+  <xacro:property name="wheel_outer_y"
+                  value="${wheel_separation / 2.0 + wheel_width / 2.0}"/>
+  <!-- Innermost point a wheel reaches along X, at the axle height. -->
+  <xacro:property name="wheel_x_inner"
+                  value="${wheelbase / 2.0 - wheel_radius}"/>
+  <xacro:property name="wing_clearance_x" value="0.004"/>
+  <xacro:property name="wing_length"
+                  value="${2.0 * (wheel_x_inner - wing_clearance_x)}"/>
+  <xacro:property name="wing_width"
+                  value="${wheel_outer_y - chassis_width / 2.0}"/>
+  <xacro:property name="wing_y"
+                  value="${(chassis_width / 2.0 + wheel_outer_y) / 2.0}"/>
+  <!-- The widest point of the body, over the wings. -->
+  <xacro:property name="chassis_overall_width" value="${2.0 * wheel_outer_y}"/>
 
   <!-- Vertical stack, ground referenced. The motors sit on the lower deck and
        drive the wheels directly, so the deck top is pinned one shaft offset
@@ -84,6 +115,85 @@
   <xacro:property name="chassis_center_z"
                   value="${(lower_deck_bottom_z + upper_deck_top_z) / 2.0
                            - base_link_height}"/>
+
+  <!-- ==================== Mounted components ====================
+       The battery and the boards ride on the decks as fixed-joint children of
+       base_link. Each link origin is the part's centroid, so its inertial sits
+       at the link origin and the Gazebo URDF reduction lumps it into base_link
+       with the right parallel-axis term. Mesh-backed parts additionally carry
+       a visual pose that seats the vendored mesh on that centroid, the same
+       per-instance convention the wheel and motor macros use.
+
+       Deck surfaces the parts sit on, in base_link coordinates. -->
+  <xacro:property name="lower_deck_surface_z"
+                  value="${lower_deck_top_z - base_link_height}"/>
+  <xacro:property name="upper_deck_surface_z"
+                  value="${upper_deck_top_z - base_link_height}"/>
+
+  <!-- 2S 5200 mAh hard-case LiPo, modelled as a plain cuboid: no mesh, and
+       the case really is a rectangular block. It lies flat on the lower deck
+       on the robot centreline, low and central, which is where the single
+       heaviest part belongs. 25 mm of the 40 mm bay, leaving headroom over it.
+       The 47 mm case clears the motor bodies inboard faces by 4.3 mm. -->
+  <xacro:property name="battery_length" value="0.138"/>
+  <xacro:property name="battery_width" value="0.047"/>
+  <xacro:property name="battery_height" value="0.025"/>
+  <xacro:property name="battery_mass" value="0.250"/>
+  <xacro:property name="battery_x" value="0.0"/>
+  <xacro:property name="battery_y" value="0.0"/>
+  <xacro:property name="battery_z"
+                  value="${lower_deck_surface_z + battery_height / 2.0}"/>
+
+  <!-- TB6612FNG carrier, two of them, one per pair of motors. Measured off
+       the vendored mesh: the board lies in its own XY plane already, so no
+       rotation, and its header pins reach driver_pin_drop below the mesh
+       origin. Seating the pin tips on the deck puts the PCB that far above it.
+
+       They flank the battery in the mid-band |x| < 0.022, where no motor
+       reaches, so the 12 mm of X clearance to the motor bodies holds even
+       though the boards share the motors' Y band. -->
+  <xacro:property name="driver_length" value="0.020"/>
+  <xacro:property name="driver_width" value="0.0204"/>
+  <xacro:property name="driver_height" value="0.0117"/>
+  <xacro:property name="driver_mass" value="0.003"/>
+  <xacro:property name="driver_pin_drop" value="0.0097"/>
+  <xacro:property name="driver_x" value="0.0"/>
+  <xacro:property name="driver_y" value="0.045"/>
+  <xacro:property name="driver_z"
+                  value="${lower_deck_surface_z + driver_height / 2.0}"/>
+  <!-- Mesh centroid relative to the mesh origin, so the visual pose can put
+       that centroid on the link origin. -->
+  <xacro:property name="driver_mesh_offset_z"
+                  value="${driver_pin_drop - driver_height / 2.0}"/>
+
+  <!-- ESP32-S3 devkit with its shield, on top of the upper deck at the rear.
+       The USB-C end is the mesh X minimum, so with no yaw it faces aft and the
+       board can be flashed without taking the robot apart.
+
+       The mesh lies in its own XZ plane with the board normal along +Y, so it
+       rolls 90 degrees about X to lie flat: mesh X stays along the body, mesh
+       Z becomes the width, and the mesh Y thickness becomes the height. The
+       mesh is also authored well off its own origin, so the offsets below are
+       its bounding-box centre carried through that same roll. -->
+  <xacro:property name="mcu_length" value="0.060479"/>
+  <xacro:property name="mcu_width" value="0.025195"/>
+  <xacro:property name="mcu_height" value="0.012200"/>
+  <xacro:property name="mcu_mass" value="0.012"/>
+  <xacro:property name="mcu_x" value="-0.085"/>
+  <xacro:property name="mcu_y" value="0.0"/>
+  <xacro:property name="mcu_z"
+                  value="${upper_deck_surface_z + mcu_height / 2.0}"/>
+  <xacro:property name="mcu_mesh_offset_x" value="-0.0566490"/>
+  <xacro:property name="mcu_mesh_offset_y" value="0.0639535"/>
+  <xacro:property name="mcu_mesh_offset_z" value="0.0611090"/>
+
+  <!-- Reserved, deliberately empty lower-deck bays. Nothing is modelled here
+       yet, but the space is claimed so later geometry does not creep into it.
+       Front bay takes the buck converters, rear bay the main power switch and
+       the battery voltage divider. Both start outboard of where the motor
+       bodies end, so they use full deck width. -->
+  <xacro:property name="reserved_bay_inner_x" value="0.0915"/>
+  <xacro:property name="reserved_bay_outer_x" value="${chassis_length / 2.0}"/>
 
   <xacro:property name="camera_depth" value="0.002"/>
   <xacro:property name="camera_width" value="0.010"/>
@@ -154,4 +264,22 @@
   <xacro:property name="imu_angular_velocity_noise_stddev" value="0.002"/>
   <xacro:property name="imu_linear_acceleration_noise_mean" value="0.0"/>
   <xacro:property name="imu_linear_acceleration_noise_stddev" value="0.02"/>
+
+  <!-- ==================== Mass budget ====================
+       total_body_mass is base_link's mass after the Gazebo URDF reduction has
+       lumped in every fixed-joint child. The components above carry their real
+       masses and the two deck plates absorb the balance, so the total is held
+       by construction rather than by a constant that goes stale whenever a
+       part is added. The plates are the right place for the balance: they also
+       stand in for the fasteners, wiring and the reserved power components.
+
+       The wheels hang off revolute joints, so they are not lumped and are not
+       counted here. -->
+  <xacro:property name="total_body_mass" value="1.80"/>
+  <xacro:property name="component_mass"
+                  value="${battery_mass + 4.0 * motor_mass
+                           + 2.0 * driver_mass + mcu_mass
+                           + lidar_mass + imu_mass + camera_mass}"/>
+  <xacro:property name="deck_mass"
+                  value="${(total_body_mass - component_mass) / 2.0}"/>
 </robot>

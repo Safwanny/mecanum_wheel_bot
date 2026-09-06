@@ -3,13 +3,39 @@
   <!-- Shifts a ground-referenced z into base_link coordinates. -->
   <xacro:property name="deck_z_offset" value="${-base_link_height}"/>
 
-  <!-- One deck plate, placed by the ground-referenced z of its bottom face. -->
+  <!-- One deck plate, placed by the ground-referenced z of its bottom face.
+
+       The plate is a cross in plan view: a full-length spine at chassis_width
+       carrying the bumpers, plus a wing on each side filling the open space
+       between that side's two wheels. Three boxes rather than one, because
+       URDF has no cross primitive - and because a single box over the whole
+       envelope would swallow the wheels.
+
+       The wings butt against the spine edges instead of overlapping them.
+       Overlapping boxes share coplanar faces, which z-fight in RViz. -->
   <xacro:macro name="deck_plate" params="bottom_z thickness">
     <visual>
       <origin xyz="0 0 ${bottom_z + thickness / 2.0 + deck_z_offset}"
               rpy="0 0 0"/>
       <geometry>
         <box size="${chassis_length} ${chassis_width} ${thickness}"/>
+      </geometry>
+      <material name="base_dark"/>
+    </visual>
+
+    <xacro:deck_wing bottom_z="${bottom_z}" thickness="${thickness}"
+                     y="${wing_y}"/>
+    <xacro:deck_wing bottom_z="${bottom_z}" thickness="${thickness}"
+                     y="${-wing_y}"/>
+  </xacro:macro>
+
+  <!-- One side wing of a deck plate. -->
+  <xacro:macro name="deck_wing" params="bottom_z thickness y">
+    <visual>
+      <origin xyz="0 ${y} ${bottom_z + thickness / 2.0 + deck_z_offset}"
+              rpy="0 0 0"/>
+      <geometry>
+        <box size="${wing_length} ${wing_width} ${thickness}"/>
       </geometry>
       <material name="base_dark"/>
     </visual>
@@ -28,6 +54,49 @@
     </visual>
   </xacro:macro>
 
+  <!-- Combined inertial for the two deck plates, about their common centre. -->
+  <xacro:property name="deck_pair_separation"
+                  value="${upper_deck_bottom_z + upper_deck_thickness / 2.0
+                           - (lower_deck_bottom_z
+                              + lower_deck_thickness / 2.0)}"/>
+  <xacro:property name="deck_pair_mass" value="${2.0 * deck_mass}"/>
+  <!-- Plan-view second moments of one cross-shaped plate, summed over the
+       spine and the two wings about the plate centre. Each limb contributes
+       its own box term plus its offset from that centre. -->
+  <xacro:property name="deck_ixx_plan"
+                  value="${(chassis_length * chassis_width
+                            * chassis_width * chassis_width) / 12.0
+                           + 2.0 * (wing_length * wing_width
+                                    * (wing_width * wing_width / 12.0
+                                       + wing_y * wing_y))}"/>
+  <xacro:property name="deck_iyy_plan"
+                  value="${(chassis_width * chassis_length
+                            * chassis_length * chassis_length) / 12.0
+                           + 2.0 * (wing_width * wing_length
+                                    * wing_length * wing_length) / 12.0}"/>
+  <xacro:property name="deck_area"
+                  value="${chassis_length * chassis_width
+                           + 2.0 * wing_length * wing_width}"/>
+
+  <xacro:macro name="deck_pair_inertial">
+    <inertial>
+      <origin xyz="0 0 ${chassis_center_z}" rpy="0 0 0"/>
+      <mass value="${deck_pair_mass}"/>
+      <inertia
+        ixx="${deck_pair_mass * (deck_ixx_plan / deck_area
+                                 + deck_thickness * deck_thickness / 12.0
+                                 + deck_pair_separation
+                                   * deck_pair_separation / 4.0)}"
+        ixy="0.0" ixz="0.0"
+        iyy="${deck_pair_mass * (deck_iyy_plan / deck_area
+                                 + deck_thickness * deck_thickness / 12.0
+                                 + deck_pair_separation
+                                   * deck_pair_separation / 4.0)}"
+        iyz="0.0"
+        izz="${deck_pair_mass * (deck_ixx_plan + deck_iyy_plan) / deck_area}"/>
+    </inertial>
+  </xacro:macro>
+
   <xacro:macro name="mobile_base_chassis" params="prefix">
     <link name="${prefix}base_footprint"/>
 
@@ -38,9 +107,12 @@
     </joint>
 
     <!-- The body is a dual-deck plate frame, not a solid block: separate
-         visuals for each plate and for the corner standoffs.
-         Collision stays a single bounding box over the whole body, so the
-         planner cannot route anything through the open electronics bay. -->
+         visuals for each plate, each wing, and each corner standoff.
+
+         Collision follows the same cross, one box per limb, spanning the full
+         body height. The planner still cannot route through the open
+         electronics bay, but the wings' boxes stop short of the wheels in X
+         instead of a single envelope box engulfing them. -->
     <link name="${prefix}base_link">
       <xacro:deck_plate bottom_z="${lower_deck_bottom_z}"
                         thickness="${lower_deck_thickness}"/>
@@ -58,11 +130,28 @@
           <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
         </geometry>
       </collision>
+      <collision>
+        <origin xyz="0 ${wing_y} ${chassis_center_z}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${wing_length} ${wing_width} ${chassis_height}"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0 ${-wing_y} ${chassis_center_z}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${wing_length} ${wing_width} ${chassis_height}"/>
+        </geometry>
+      </collision>
 
-      <xacro:box_inertial mass="${chassis_mass}"
-                          x="${chassis_length}" y="${chassis_width}" z="${chassis_height}">
-        <origin xyz="0 0 ${chassis_center_z}" rpy="0 0 0"/>
-      </xacro:box_inertial>
+      <!-- The structural mass is the two plates, so it is carried at the
+           plates rather than at the mid-height of an imaginary solid body.
+           URDF allows one inertial per link, so the two plates are combined
+           here: equal masses at equal distances either side of their midpoint,
+           which is what a single box of their combined span and the plate
+           footprint already integrates to about the horizontal axes. The
+           parallel-axis term for the vertical separation is added explicitly,
+           since a solid box of that height would understate it. -->
+      <xacro:deck_pair_inertial/>
     </link>
   </xacro:macro>
 </robot>
