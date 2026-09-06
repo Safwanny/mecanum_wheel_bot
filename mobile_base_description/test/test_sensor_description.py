@@ -104,10 +104,19 @@ def main():
     lidar_link = link_by_name['lidar_link']
 
     # base_link is a dual-deck plate frame, not a solid block: one visual per
-    # printed part, and a single collision box bounding all of them. The
-    # planner must never see the open electronics bay as passable.
+    # printed part, and collision boxes bounding all of them. The planner must
+    # never see the open electronics bay as passable.
+    #
+    # Each deck is a cross in plan view - a full-length spine carrying the
+    # bumpers, plus a wing per side filling the space between that side's two
+    # wheels - so a deck is three visuals, not one.
     BASE_LINK_HEIGHT = 0.040372215
-    FOOTPRINT = (0.216, 0.100)
+    SPINE = (0.240, 0.100)
+    WING = (0.08051114, 0.033802715)
+    # Widest point of the body, over the wings.
+    OVERALL_WIDTH = 0.16760543
+    WHEELBASE = 0.150
+    WHEEL_RADIUS = 0.03074443
 
     def ground(z):
         return z + BASE_LINK_HEIGHT
@@ -126,15 +135,40 @@ def main():
         return centre - height / 2.0, centre + height / 2.0
 
     chassis_visuals = chassis.findall('visual')
-    decks = [
-        visual for visual in chassis_visuals
-        if visual.find('./geometry/box') is not None
-        and tuple(
-            float(value)
-            for value in visual.find('./geometry/box').attrib['size'].split()
-        )[:2] == FOOTPRINT
-    ]
-    assert len(decks) == 2, 'expected exactly two deck plates'
+
+    def boxes_of_footprint(visuals, footprint):
+        # Derived xacro dimensions carry float noise in the last bits, so
+        # footprints are matched to a micrometre rather than exactly.
+        def matches(visual):
+            box = visual.find('./geometry/box')
+            if box is None:
+                return False
+            size = [float(value) for value in box.attrib['size'].split()]
+            return all(
+                math.isclose(actual, expected, abs_tol=1e-6)
+                for actual, expected in zip(size[:2], footprint)
+            )
+
+        return [visual for visual in visuals if matches(visual)]
+
+    decks = boxes_of_footprint(chassis_visuals, SPINE)
+    assert len(decks) == 2, 'expected exactly two deck spines'
+
+    # Two wings per deck, one either side, at matching heights.
+    wings = boxes_of_footprint(chassis_visuals, WING)
+    assert len(wings) == 4, 'expected two wings on each of the two decks'
+    wing_y = sorted(xyz(wing.find('origin'))[1] for wing in wings)
+    assert math.isclose(wing_y[0], -wing_y[3], abs_tol=1e-9)
+    assert math.isclose(wing_y[1], -wing_y[2], abs_tol=1e-9)
+    # The wings reach the wheel outer faces and no further, so the body's
+    # widest point is the wheel envelope rather than something proud of it.
+    for wing in wings:
+        half_span = abs(xyz(wing.find('origin'))[1]) + WING[1] / 2.0
+        assert math.isclose(2.0 * half_span, OVERALL_WIDTH, abs_tol=1e-6)
+    # Every wing shares a deck's height, so the wings are part of the plates
+    # rather than floating slabs.
+    deck_heights = {round(z_extent(deck)[0], 9) for deck in decks}
+    assert {round(z_extent(wing)[0], 9) for wing in wings} == deck_heights
     deck_thicknesses = {
         float(visual.find('./geometry/box').attrib['size'].split()[2])
         for visual in decks
@@ -153,23 +187,62 @@ def main():
     # shaft height above its resting face, minus the plate thickness.
     assert 0.008 < lower_bottom < 0.012
 
+    # Collision follows the same cross the visuals do: a spine box and one box
+    # per wing. A single box over the whole envelope would reach out to the
+    # wheel outer faces along the entire body length and swallow the wheels.
     chassis_collisions = chassis.findall('collision')
-    assert len(chassis_collisions) == 1, 'body collision must be one box'
-    collision = chassis_collisions[0]
-    collision_size = tuple(
-        float(value)
-        for value in collision.find('./geometry/box').attrib['size'].split()
-    )
-    assert collision_size[:2] == FOOTPRINT
-    collision_bottom, collision_top = z_extent(collision)
+    assert len(chassis_collisions) == 3, 'body collision is a spine plus wings'
+    spine_collisions = boxes_of_footprint(chassis_collisions, SPINE)
+    wing_collisions = boxes_of_footprint(chassis_collisions, WING)
+    assert len(spine_collisions) == 1
+    assert len(wing_collisions) == 2
 
-    # The bounding box must actually bound: every visual part lies inside it.
-    assert math.isclose(collision_bottom, lower_bottom, abs_tol=1e-9)
-    assert math.isclose(collision_top, upper_top, abs_tol=1e-9)
+    # Every limb spans the full body height, so nothing routes over or under.
+    for collision in chassis_collisions:
+        bottom, top = z_extent(collision)
+        assert math.isclose(bottom, lower_bottom, abs_tol=1e-9)
+        assert math.isclose(top, upper_top, abs_tol=1e-9)
+
+    def footprint(element, size):
+        centre = xyz(element.find('origin'))
+        return (
+            (centre[0] - size[0] / 2.0, centre[0] + size[0] / 2.0),
+            (centre[1] - size[1] / 2.0, centre[1] + size[1] / 2.0),
+        )
+
+    def box_size(element):
+        return [
+            float(value)
+            for value in element.find('./geometry/box').attrib['size'].split()
+        ]
+
+    collision_footprints = [
+        footprint(collision, box_size(collision))
+        for collision in chassis_collisions
+    ]
+
+    # The collision set must actually bound the body: every visual lies inside
+    # the height, and every box visual's footprint inside some collision limb.
     for visual in chassis_visuals:
         bottom, top = z_extent(visual)
-        assert bottom >= collision_bottom - 1e-9
-        assert top <= collision_top + 1e-9
+        assert bottom >= lower_bottom - 1e-9
+        assert top <= upper_top + 1e-9
+        if visual.find('./geometry/box') is None:
+            continue
+        (vx0, vx1), (vy0, vy1) = footprint(visual, box_size(visual))
+        assert any(
+            cx0 - 1e-9 <= vx0 and vx1 <= cx1 + 1e-9
+            and cy0 - 1e-9 <= vy0 and vy1 <= cy1 + 1e-9
+            for (cx0, cx1), (cy0, cy1) in collision_footprints
+        ), 'a deck visual escapes the collision cross'
+
+    # The wings must clear the wheels. A wheel reaches wheel_x_inner towards
+    # the middle of the robot at axle height; a wing collision that crossed
+    # that would sit inside a rotating wheel.
+    wheel_x_inner = WHEELBASE / 2.0 - WHEEL_RADIUS
+    for collision in wing_collisions:
+        (wx0, wx1), _ = footprint(collision, box_size(collision))
+        assert max(abs(wx0), abs(wx1)) < wheel_x_inner
 
     # Each motor stands on the lower deck and shares its wheel's joint origin,
     # so the motor frame sits on the output shaft it drives. Motors carry no
@@ -188,11 +261,77 @@ def main():
             joint_by_name[wheel].find('origin')
         )
 
+    # The deck components are fixed-joint children of base_link whose link
+    # origin is the part's own centroid, so the Gazebo reduction lumps each in
+    # with the right parallel-axis term and every component frame is where its
+    # mass actually is. None carries collision: the chassis cross already
+    # bounds the bay they sit in.
+    LOWER_DECK_SURFACE = 0.01954443
+    UPPER_DECK_SURFACE = 0.06954443
+    COMPONENTS = {
+        'battery_link': (LOWER_DECK_SURFACE, 0.025, 0.250),
+        'left_motor_driver_link': (LOWER_DECK_SURFACE, 0.0117, 0.003),
+        'right_motor_driver_link': (LOWER_DECK_SURFACE, 0.0117, 0.003),
+        'mcu_link': (UPPER_DECK_SURFACE, 0.0122, 0.012),
+    }
+    for name, (surface, height, mass) in COMPONENTS.items():
+        assert name in link_names, f'{name} is missing'
+        assert_fixed_child(joints, name, 'base_link')
+        component = link_by_name[name]
+        assert not component.findall('collision')
+
+        inertial = component.find('inertial')
+        assert math.isclose(float(inertial.find('mass').attrib['value']), mass)
+        # The inertial sits at the link origin, which is the centroid.
+        assert xyz(inertial.find('origin')) == (0.0, 0.0, 0.0)
+
+        # The part rests on its deck: centroid one half-height above it.
+        centre = ground(xyz(joint_by_name[
+            name.replace('_link', '_joint')].find('origin'))[2])
+        assert math.isclose(centre - height / 2.0, surface, abs_tol=1e-6), (
+            f'{name} does not sit on its deck')
+
+    # The drivers are mirrored about the centreline and flank the battery.
+    driver_y = [
+        xyz(joint_by_name[f'{side}_motor_driver_joint'].find('origin'))[1]
+        for side in ('left', 'right')
+    ]
+    assert math.isclose(driver_y[0], -driver_y[1], abs_tol=1e-9)
+    assert min(abs(y) for y in driver_y) > 0.047 / 2.0
+
+    # base_link's mass after the Gazebo reduction lumps in every fixed-joint
+    # child. The deck plates carry the balance, so this total is what
+    # total_body_mass in properties.xacro declares.
+    joint_by_child = {
+        joint.find('child').attrib['link']: joint for joint in joints
+    }
+
+    def lumps_into_base_link(name):
+        """Report whether every joint up to base_link is fixed."""
+        while name != 'base_link':
+            joint = joint_by_child.get(name)
+            if joint is None or joint.attrib['type'] != 'fixed':
+                return False
+            name = joint.find('parent').attrib['link']
+        return True
+
+    lumped = float(chassis.find('./inertial/mass').attrib['value'])
+    for link in links:
+        name = link.attrib['name']
+        inertial = link.find('inertial')
+        if name == 'base_link' or inertial is None:
+            continue
+        if lumps_into_base_link(name):
+            lumped += float(inertial.find('mass').attrib['value'])
+    assert math.isclose(lumped, 1.80, abs_tol=1e-9), (
+        f'lumped body mass is {lumped}, expected total_body_mass 1.80')
+
     imu_size = tuple(
         float(value)
         for value in imu_link.find('./visual/geometry/box').attrib['size'].split()
     )
-    assert imu_size == (0.050, 0.050, 0.008)
+    # Matches imu_length/imu_width/imu_height in properties.xacro.
+    assert imu_size == (0.025, 0.025, 0.004)
 
     imu_joint_origin = xyz(
         joint_by_name['base_link_to_imu_link_joint'].find('origin')
@@ -244,7 +383,7 @@ def main():
     # The scan plane bisects the head, and clears the whole body.
     scan_plane = ground(lidar_joint_origin[2])
     assert math.isclose(scan_plane, (head_bottom + head_top) / 2.0, abs_tol=1e-9)
-    assert scan_plane > collision_top
+    assert scan_plane > upper_top
 
     # One collision box spans the whole sensor, base and head together.
     lidar_collisions = lidar_link.findall('collision')

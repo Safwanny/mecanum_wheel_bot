@@ -135,10 +135,27 @@ def main():
     wheelbase = float(properties['wheelbase'])
     wheel_separation = float(properties['wheel_separation'])
     wheel_width = float(properties['wheel_width'])
+    wheel_radius = float(properties['wheel_radius'])
     chassis_length = float(properties['chassis_length'])
-    half_length = max(chassis_length, wheelbase) / 2.0
-    half_width = (wheel_separation + wheel_width) / 2.0
-    circumscribed = hypot(half_length, half_width)
+    chassis_width = float(properties['chassis_width'])
+    wing_clearance_x = float(properties['wing_clearance_x'])
+
+    # The body is not a filled rectangle: each deck is a cross, so its corners
+    # at full length and full width are empty air. Taking the circumscribed
+    # radius from a length-by-width bounding box would charge the robot for
+    # material it does not have and force a larger footprint than it needs.
+    # Measure the real limbs instead - the spine with its bumpers, the side
+    # wings, and the wheels - and take the furthest.
+    wheel_outer_y = (wheel_separation + wheel_width) / 2.0
+    wing_half_length = wheelbase / 2.0 - wheel_radius - wing_clearance_x
+    circumscribed = max(
+        # Bumper corner, at the spine width.
+        hypot(chassis_length / 2.0, chassis_width / 2.0),
+        # Wing corner, at the wheel outer face.
+        hypot(wing_half_length, wheel_outer_y),
+        # The wheels themselves, which usually dominate.
+        hypot(wheelbase / 2.0 + wheel_radius, wheel_outer_y),
+    )
     assert global_costmap['robot_radius'] >= circumscribed
     assert local_costmap['robot_radius'] == global_costmap['robot_radius']
 
