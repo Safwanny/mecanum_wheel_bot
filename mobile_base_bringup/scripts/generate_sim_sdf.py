@@ -39,7 +39,16 @@ MOTOR_URI_PREFIXES = (
     'model://mobile_base/meshes/motors/',
     'model://mobile_base_description/meshes/motors/',
 )
+COMPONENT_URI_PREFIXES = (
+    'package://mobile_base_description/meshes/electronics/',
+    'package://mobile_base/meshes/electronics/',
+    'model://mobile_base/meshes/electronics/',
+    'model://mobile_base_description/meshes/electronics/',
+)
 MOTOR_FILES = {'tt_gearmotor.stl'}
+# The battery is a plain box, so only the boards appear here.
+COMPONENT_FILES = {'esp32_s3_devkit_shield.stl', 'tb6612fng.stl'}
+COMPONENT_MESH_REFERENCES = 3
 WHEEL_FILES = {
     'mecanum_wheel_FL.stl', 'mecanum_wheel_FR.stl',
     'mecanum_wheel_RL.stl', 'mecanum_wheel_RR.stl',
@@ -79,6 +88,20 @@ def _motor_file_uris():
     if missing:
         raise RuntimeError('Missing installed motor meshes: ' + ', '.join(missing))
     return {name: (motors / name).resolve().as_uri() for name in MOTOR_FILES}
+
+
+def _component_file_uris():
+    share = Path(get_package_share_directory('mobile_base_description'))
+    electronics = share / 'meshes' / 'electronics'
+    missing = sorted(
+        name for name in COMPONENT_FILES if not (electronics / name).is_file())
+    if missing:
+        raise RuntimeError(
+            'Missing installed component meshes: ' + ', '.join(missing))
+    return {
+        name: (electronics / name).resolve().as_uri()
+        for name in COMPONENT_FILES
+    }
 
 
 def _nonnegative_finite(value, field):
@@ -249,6 +272,31 @@ def _rewrite_motor_mesh_uris(root):
             f'motor; found {referenced}')
 
 
+def _rewrite_component_mesh_uris(root):
+    """Resolve the deck component meshes to absolute paths for Gazebo."""
+    # Like the motors and unlike the wheels this counts references rather than
+    # requiring each file once: the two motor drivers share one mesh. An
+    # unrewritten URI is not a cosmetic problem - Gazebo cannot resolve a
+    # package:// path and the part silently vanishes from the scene, so the
+    # count is asserted rather than left to a visual check.
+    component_file_uris = _component_file_uris()
+    referenced = 0
+    for uri in root.findall('.//uri'):
+        for prefix in COMPONENT_URI_PREFIXES:
+            if uri.text and uri.text.startswith(prefix):
+                mesh_name = uri.text[len(prefix):]
+                if mesh_name not in component_file_uris:
+                    raise RuntimeError(
+                        'Unresolved component visual URI: ' + uri.text)
+                uri.text = component_file_uris[mesh_name]
+                referenced += 1
+                break
+    if referenced != COMPONENT_MESH_REFERENCES:
+        raise RuntimeError(
+            'Generated SDF must reference the component visual meshes '
+            f'{COMPONENT_MESH_REFERENCES} times; found {referenced}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--xacro', required=True)
@@ -270,6 +318,7 @@ def main():
     root = ET.fromstring(sdf)
     _rewrite_wheel_mesh_uris(root)
     _rewrite_motor_mesh_uris(root)
+    _rewrite_component_mesh_uris(root)
     inject_wheel_surfaces(root)
     validate_mecanum_wheel_contact(root)
     ET.ElementTree(root).write(

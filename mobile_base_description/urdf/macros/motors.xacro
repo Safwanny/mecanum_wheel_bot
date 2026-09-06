@@ -11,11 +11,18 @@
        The mesh origin is a bounding-box corner with the long axis along its
        own +X, so visual_xyz/visual_rpy seat the shaft on the link origin and
        point the motor can inboard - the same per-instance pose convention the
-       wheel macro uses. The motors carry negligible mass: the Gazebo URDF
-       reduction lumps fixed-joint children into base_link, and chassis_mass is
-       already the whole-body mass. -->
+       wheel macro uses.
+
+       The motors carry their real mass. The Gazebo URDF reduction lumps
+       fixed-joint children into base_link with parallel-axis terms, and the
+       deck plates absorb the balance so the lumped total stays at
+       total_body_mass. The inertia sits at centroid_xyz rather than at the
+       link origin, because the link origin is the output shaft: putting a
+       30 g body on the shaft instead of at its centre would misplace it by
+       nearly 30 mm. -->
   <xacro:macro name="tt_gearmotor"
-               params="prefix name parent x y z visual_xyz visual_rpy">
+               params="prefix name parent x y z visual_xyz visual_rpy
+                       centroid_xyz">
     <link name="${prefix}${name}_motor_link">
       <visual>
         <origin xyz="${visual_xyz}" rpy="${visual_rpy}"/>
@@ -30,12 +37,14 @@
       <!-- No collision: the chassis bounding box already covers the motors,
            and an extra collision would break the one-surface-per-wheel
            contract the Gazebo SDF generator relies on. -->
-      <inertial>
-        <origin xyz="0 0 0" rpy="0 0 0"/>
-        <mass value="${motor_mass}"/>
-        <inertia ixx="1.0e-9" ixy="0.0" ixz="0.0"
-                 iyy="1.0e-9" iyz="0.0" izz="1.0e-9"/>
-      </inertial>
+      <!-- The motor lies flat with its body along X, the shaft axis across
+           the robot, and its resting faces top and bottom, so the bounding
+           box in link axes is length by span by height. -->
+      <xacro:box_inertial mass="${motor_mass}"
+                          x="${motor_length}" y="${motor_span}"
+                          z="${motor_height}">
+        <origin xyz="${centroid_xyz}" rpy="0 0 0"/>
+      </xacro:box_inertial>
     </link>
 
     <joint name="${prefix}${name}_motor_joint" type="fixed">

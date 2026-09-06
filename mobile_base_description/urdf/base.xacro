@@ -46,33 +46,95 @@
     <xacro:property name="motor_inboard_y"
                     value="${wheel_width / 2.0 - motor_body_outer}"/>
 
+    <!-- The link origin is the output shaft, which is not the centre of mass:
+         the shaft sits at motor_shaft_x along the body and is centred in the
+         motor height, so the body centroid is offset along the body and along
+         the shaft axis but not vertically. The offsets are per instance
+         because they follow the same roll and yaw as the visual: the sign of
+         the body offset flips with the 180 degree yaw between front and rear,
+         and the sign of the shaft-axis offset flips between left and right. -->
+    <xacro:property name="motor_centroid_body"
+                    value="${motor_length / 2.0 - motor_shaft_x}"/>
+    <xacro:property name="motor_centroid_axis"
+                    value="${motor_span / 2.0 + motor_inboard_y}"/>
+
     <xacro:tt_gearmotor prefix="${prefix}" name="front_left"
                         x="${wheelbase / 2.0}" y="${wheel_separation / 2.0}"
                         z="${wheel_z}" parent="base_link"
                         visual_xyz="${-motor_shaft_x} ${-motor_inboard_y}
                                     ${-motor_shaft_offset}"
-                        visual_rpy="${pi / 2.0} 0 0"/>
+                        visual_rpy="${pi / 2.0} 0 0"
+                        centroid_xyz="${motor_centroid_body} ${-motor_centroid_axis} 0"/>
 
     <xacro:tt_gearmotor prefix="${prefix}" name="front_right"
                         x="${wheelbase / 2.0}" y="${-wheel_separation / 2.0}"
                         z="${wheel_z}" parent="base_link"
                         visual_xyz="${-motor_shaft_x} ${motor_inboard_y}
                                     ${motor_shaft_offset}"
-                        visual_rpy="${-pi / 2.0} 0 0"/>
+                        visual_rpy="${-pi / 2.0} 0 0"
+                        centroid_xyz="${motor_centroid_body} ${motor_centroid_axis} 0"/>
 
     <xacro:tt_gearmotor prefix="${prefix}" name="rear_right"
                         x="${-wheelbase / 2.0}" y="${-wheel_separation / 2.0}"
                         z="${wheel_z}" parent="base_link"
                         visual_xyz="${motor_shaft_x} ${motor_inboard_y}
                                     ${-motor_shaft_offset}"
-                        visual_rpy="${pi / 2.0} 0 ${pi}"/>
+                        visual_rpy="${pi / 2.0} 0 ${pi}"
+                        centroid_xyz="${-motor_centroid_body} ${motor_centroid_axis} 0"/>
 
     <xacro:tt_gearmotor prefix="${prefix}" name="rear_left"
                         x="${-wheelbase / 2.0}" y="${wheel_separation / 2.0}"
                         z="${wheel_z}" parent="base_link"
                         visual_xyz="${motor_shaft_x} ${-motor_inboard_y}
                                     ${motor_shaft_offset}"
-                        visual_rpy="${-pi / 2.0} 0 ${pi}"/>
+                        visual_rpy="${-pi / 2.0} 0 ${pi}"
+                        centroid_xyz="${-motor_centroid_body} ${-motor_centroid_axis} 0"/>
+
+    <!-- Lower deck, on the centreline: the single heaviest part, kept low and
+         central so it pulls the centre of mass down rather than sideways. -->
+    <xacro:box_component prefix="${prefix}" name="battery" parent="base_link"
+                         x="${battery_x}" y="${battery_y}" z="${battery_z}"
+                         length="${battery_length}" width="${battery_width}"
+                         height="${battery_height}" mass="${battery_mass}"
+                         material="battery_grey"/>
+
+    <!-- Lower deck, flanking the battery. One driver per pair of motors. The
+         mesh already lies flat, so it only needs lifting by the header pin
+         drop to put its own centroid on the link origin. -->
+    <xacro:mesh_component prefix="${prefix}" name="left_motor_driver"
+                          parent="base_link"
+                          x="${driver_x}" y="${driver_y}" z="${driver_z}"
+                          length="${driver_length}" width="${driver_width}"
+                          height="${driver_height}" mass="${driver_mass}"
+                          mesh="tb6612fng.stl" material="electronics_green"
+                          visual_xyz="0 0 ${driver_mesh_offset_z}"
+                          visual_rpy="0 0 0"/>
+
+    <xacro:mesh_component prefix="${prefix}" name="right_motor_driver"
+                          parent="base_link"
+                          x="${driver_x}" y="${-driver_y}" z="${driver_z}"
+                          length="${driver_length}" width="${driver_width}"
+                          height="${driver_height}" mass="${driver_mass}"
+                          mesh="tb6612fng.stl" material="electronics_green"
+                          visual_xyz="0 0 ${driver_mesh_offset_z}"
+                          visual_rpy="0 0 0"/>
+
+    <!-- Upper deck, rear, sitting on top of the plate. The mesh stands on
+         edge with its board normal along its own +Y, so it rolls 90 degrees
+         about X to lie flat; the mesh is also authored well off its origin, so
+         the offsets carry its bounding-box centre through that same roll onto
+         the link origin. No yaw: the USB-C end is the mesh X minimum, which
+         with no yaw faces aft and stays reachable for flashing. -->
+    <xacro:mesh_component prefix="${prefix}" name="mcu" parent="base_link"
+                          x="${mcu_x}" y="${mcu_y}" z="${mcu_z}"
+                          length="${mcu_length}" width="${mcu_width}"
+                          height="${mcu_height}" mass="${mcu_mass}"
+                          mesh="esp32_s3_devkit_shield.stl"
+                          material="electronics_green"
+                          visual_xyz="${-mcu_mesh_offset_x}
+                                      ${-mcu_mesh_offset_y}
+                                      ${-mcu_mesh_offset_z}"
+                          visual_rpy="${pi / 2.0} 0 0"/>
 
   </xacro:macro>
 </robot>

@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Parts that ride on the decks: the battery and the boards.
+
+       Each link origin is the part's centroid, so its inertial sits at the
+       link origin and the Gazebo URDF reduction lumps the part into base_link
+       with the correct parallel-axis term. That also makes every component
+       frame directly inspectable in tf: the frame is where the mass is.
+
+       No collision geometry. The chassis cross already bounds the bay these
+       parts sit in, and giving them their own collisions would only add
+       contact pairs for bodies that can never touch anything. -->
+
+  <!-- A part modelled as a plain box, for hardware with no vendored mesh. -->
+  <xacro:macro name="box_component"
+               params="prefix name parent x y z length width height mass
+                       material">
+    <link name="${prefix}${name}_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${length} ${width} ${height}"/>
+        </geometry>
+        <material name="${material}"/>
+      </visual>
+
+      <xacro:box_inertial mass="${mass}"
+                          x="${length}" y="${width}" z="${height}">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </xacro:box_inertial>
+    </link>
+
+    <joint name="${prefix}${name}_joint" type="fixed">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${name}_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- A part backed by a vendored mesh. visual_xyz and visual_rpy seat the
+       mesh's own bounding-box centre on the link origin, the same per-instance
+       pose convention the wheel and motor macros use, because these meshes are
+       authored neither centred nor axis-aligned to the robot. The inertia
+       still comes from the measured bounding box, not the mesh: a board is
+       close enough to a uniform slab, and tessellated inertia would be
+       precision the mass estimate does not have. -->
+  <xacro:macro name="mesh_component"
+               params="prefix name parent x y z length width height mass
+                       mesh material visual_xyz visual_rpy">
+    <link name="${prefix}${name}_link">
+      <visual>
+        <origin xyz="${visual_xyz}" rpy="${visual_rpy}"/>
+        <geometry>
+          <mesh
+            filename="package://mobile_base_description/meshes/electronics/${mesh}"
+            scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="${material}"/>
+      </visual>
+
+      <xacro:box_inertial mass="${mass}"
+                          x="${length}" y="${width}" z="${height}">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+      </xacro:box_inertial>
+    </link>
+
+    <joint name="${prefix}${name}_joint" type="fixed">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${name}_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>
