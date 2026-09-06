@@ -5,43 +5,24 @@
 
   <!-- One deck plate, placed by the ground-referenced z of its bottom face.
 
-       The plate is the full body rectangle with the four wheel wells cut out,
-       built from five butted boxes: a central spine, an end cap at each end
-       spanning the full body width, and a side wing filling the space between
-       each side's two wheels. URDF has no such primitive, and one box over
-       the whole envelope would swallow the wheels.
+       The plate outline is the body rectangle with the four wheel wells cut
+       out and the four bumper corners chamfered at 45 degrees from the wheel
+       line. URDF has no prism primitive, so unlike the collision limbs below
+       the outline cannot be built from boxes - it is a mesh, generated from
+       these same properties by scripts/generate_deck_mesh.py and checked
+       against them by the verify_deck_mesh test so it cannot drift.
 
-       The boxes butt rather than overlap. Overlapping boxes share coplanar
-       faces, which z-fight in RViz. -->
+       Both decks are identical, so one mesh serves both. It is authored
+       centred on the plate, so the visual needs no pose of its own beyond the
+       plate's height. -->
   <xacro:macro name="deck_plate" params="bottom_z thickness">
-    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
-                     x="0" y="0"
-                     length="${spine_length}" width="${chassis_width}"/>
-
-    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
-                     x="${cap_x}" y="0"
-                     length="${cap_length}"
-                     width="${chassis_overall_width}"/>
-    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
-                     x="${-cap_x}" y="0"
-                     length="${cap_length}"
-                     width="${chassis_overall_width}"/>
-
-    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
-                     x="0" y="${wing_y}"
-                     length="${wing_length}" width="${wing_width}"/>
-    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
-                     x="0" y="${-wing_y}"
-                     length="${wing_length}" width="${wing_width}"/>
-  </xacro:macro>
-
-  <!-- One rectangular piece of a deck plate. -->
-  <xacro:macro name="deck_slab" params="bottom_z thickness x y length width">
     <visual>
-      <origin xyz="${x} ${y} ${bottom_z + thickness / 2.0 + deck_z_offset}"
+      <origin xyz="0 0 ${bottom_z + thickness / 2.0 + deck_z_offset}"
               rpy="0 0 0"/>
       <geometry>
-        <box size="${length} ${width} ${thickness}"/>
+        <mesh
+          filename="package://mobile_base_description/meshes/decks/deck_plate.stl"
+          scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="base_dark"/>
     </visual>
@@ -134,10 +115,14 @@
     <!-- The body is a dual-deck plate frame, not a solid block: separate
          visuals for each plate, each wing, and each corner standoff.
 
-         Collision follows the same outline, one box per limb, spanning the
-         full body height. The planner still cannot route through the open
-         electronics bay, but the limbs leave the four wheel wells open
-         instead of a single envelope box engulfing the wheels. -->
+         Collision approximates that outline with one box per limb, spanning
+         the full body height. The planner still cannot route through the open
+         electronics bay, and the limbs leave the four wheel wells open
+         instead of a single envelope box engulfing the wheels. The boxes keep
+         square bumper corners where the plate is chamfered, so collision
+         over-claims two small triangles at each end: boxes are cheaper and
+         steadier in contact than a mesh, and erring outwards is the safe
+         direction for a footprint. -->
     <link name="${prefix}base_link">
       <xacro:deck_plate bottom_z="${lower_deck_bottom_z}"
                         thickness="${lower_deck_thickness}"/>

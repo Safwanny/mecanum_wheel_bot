@@ -121,15 +121,16 @@ battery and boards that ride on them - plus a box collision per deck limb.
 Splitting the visuals while keeping collision closed is deliberate: the planner
 must never see the open electronics bay between the decks as passable geometry.
 
-Each deck is the full body rectangle with the four wheel wells cut out of it,
-built from five butted boxes:
+Each deck is the full body rectangle with the four wheel wells cut out of it
+and the four bumper corners chamfered at 45 degrees from the wheel line:
 
-| Limb | Extent |
+| Feature | Extent |
 | --- | --- |
-| Central spine | 0.2195 m x 0.100 m |
-| End caps, fore and aft | 0.0203 m x 0.1676 m |
-| Side wings, one per side | 0.0805 m x 0.0338 m |
 | Overall body | 0.260 m x 0.1676 m |
+| Bumper edge, after the chamfer | 0.1271 m wide |
+| Central spine | 0.2195 m x 0.100 m |
+| End caps, fore and aft | 0.0203 m deep, full body width |
+| Side wings, one per side | 0.0805 m x 0.0338 m |
 
 The end caps run the full body width 20 mm in front of and behind the wheels,
 so nothing strikes a wheel head on without hitting deck first. The wings fill
@@ -138,12 +139,31 @@ faces, and every limb stands `wing_clearance_x` clear of the wheels, leaving
 four open wheel wells. Every bound derives from the wheel geometry, so moving a
 wheel moves the deck outline with it.
 
-Collision follows the same outline, one box per limb. A single box over the
-whole envelope would reach the wheel outer faces along the entire body length
-and swallow the wheels.
+### The plate is a generated mesh
 
-The body's circumscribed radius is the cap corner at 0.1547 m, so Nav2's
-`robot_radius` is 0.16 m in `planner.yaml` and `local_costmap.yaml`. Raising
+The chamfer is why. URDF's primitives are box, cylinder, sphere and mesh, so a
+45 degree face cannot be expressed as boxes the way the rest of the outline
+can. Both decks are identical, so one mesh serves both:
+
+- `mobile_base_description/scripts/generate_deck_mesh.py` emits
+  `meshes/decks/deck_plate.stl`, reading its dimensions back through xacro
+  rather than restating them, so the mesh is built from exactly what the URDF
+  is built from.
+- The `verify_deck_mesh` test regenerates and compares, so editing the body
+  geometry and forgetting the mesh fails the suite rather than shipping a
+  plate that no longer matches its own properties.
+- The surface is watertight: the tiling is split at every join so no T-junction
+  is left where a long edge meets a short one.
+
+Collision stays boxes - one per limb, five in all. Boxes are cheaper and
+steadier in contact than a mesh, and they keep square bumper corners where the
+plate is chamfered, so collision over-claims two small triangles at each end.
+Erring outwards is the safe direction for a footprint. A single box over the
+whole envelope, by contrast, would reach the wheel outer faces along the entire
+body length and swallow the wheels.
+
+The collision boxes' circumscribed radius is the square cap corner at
+0.1547 m, so Nav2's `robot_radius` is 0.16 m in `planner.yaml` and `local_costmap.yaml`. Raising
 `chassis_length` pushes that corner further out and those two values must move
 with it.
 

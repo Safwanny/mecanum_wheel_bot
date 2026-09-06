@@ -39,6 +39,12 @@ MOTOR_URI_PREFIXES = (
     'model://mobile_base/meshes/motors/',
     'model://mobile_base_description/meshes/motors/',
 )
+DECK_URI_PREFIXES = (
+    'package://mobile_base_description/meshes/decks/',
+    'package://mobile_base/meshes/decks/',
+    'model://mobile_base/meshes/decks/',
+    'model://mobile_base_description/meshes/decks/',
+)
 COMPONENT_URI_PREFIXES = (
     'package://mobile_base_description/meshes/electronics/',
     'package://mobile_base/meshes/electronics/',
@@ -49,6 +55,9 @@ MOTOR_FILES = {'tt_gearmotor.stl'}
 # The battery is a plain box, so only the boards appear here.
 COMPONENT_FILES = {'esp32_s3_devkit_shield.stl', 'tb6612fng.stl'}
 COMPONENT_MESH_REFERENCES = 3
+# One generated plate mesh, used once per deck.
+DECK_FILES = {'deck_plate.stl'}
+DECK_MESH_REFERENCES = 2
 WHEEL_FILES = {
     'mecanum_wheel_FL.stl', 'mecanum_wheel_FR.stl',
     'mecanum_wheel_RL.stl', 'mecanum_wheel_RR.stl',
@@ -102,6 +111,15 @@ def _component_file_uris():
         name: (electronics / name).resolve().as_uri()
         for name in COMPONENT_FILES
     }
+
+
+def _deck_file_uris():
+    share = Path(get_package_share_directory('mobile_base_description'))
+    decks = share / 'meshes' / 'decks'
+    missing = sorted(name for name in DECK_FILES if not (decks / name).is_file())
+    if missing:
+        raise RuntimeError('Missing installed deck meshes: ' + ', '.join(missing))
+    return {name: (decks / name).resolve().as_uri() for name in DECK_FILES}
 
 
 def _nonnegative_finite(value, field):
@@ -297,6 +315,25 @@ def _rewrite_component_mesh_uris(root):
             f'{COMPONENT_MESH_REFERENCES} times; found {referenced}')
 
 
+def _rewrite_deck_mesh_uris(root):
+    """Resolve the generated deck plate mesh to an absolute path for Gazebo."""
+    deck_file_uris = _deck_file_uris()
+    referenced = 0
+    for uri in root.findall('.//uri'):
+        for prefix in DECK_URI_PREFIXES:
+            if uri.text and uri.text.startswith(prefix):
+                mesh_name = uri.text[len(prefix):]
+                if mesh_name not in deck_file_uris:
+                    raise RuntimeError('Unresolved deck visual URI: ' + uri.text)
+                uri.text = deck_file_uris[mesh_name]
+                referenced += 1
+                break
+    if referenced != DECK_MESH_REFERENCES:
+        raise RuntimeError(
+            'Generated SDF must reference the deck plate mesh once per deck; '
+            f'expected {DECK_MESH_REFERENCES}, found {referenced}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--xacro', required=True)
@@ -319,6 +356,7 @@ def main():
     _rewrite_wheel_mesh_uris(root)
     _rewrite_motor_mesh_uris(root)
     _rewrite_component_mesh_uris(root)
+    _rewrite_deck_mesh_uris(root)
     inject_wheel_surfaces(root)
     validate_mecanum_wheel_contact(root)
     ET.ElementTree(root).write(

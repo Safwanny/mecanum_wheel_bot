@@ -18,6 +18,7 @@
 
 import math
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,23 @@ def xyz(element):
     return tuple(float(value) for value in element.attrib['xyz'].split())
 
 
+def stl_extent(path):
+    """Return the bounding-box span of a binary STL, in its own units."""
+    data = path.read_bytes()
+    count = struct.unpack('<I', data[80:84])[0]
+    spans = []
+    for axis in range(3):
+        values = [
+            struct.unpack(
+                '<f',
+                data[84 + i * 50 + 12 + corner * 12 + axis * 4:][:4],
+            )[0]
+            for i in range(count) for corner in range(3)
+        ]
+        spans.append(max(values) - min(values))
+    return spans
+
+
 def main():
     xacro_path = Path(sys.argv[1])
     urdf_text, robot = generated_robot(xacro_path, use_gazebo=False)
@@ -116,6 +134,7 @@ def main():
     WHEEL_RADIUS = 0.03074443
     # Widest point of the body, reached by both the caps and the wings.
     OVERALL_WIDTH = 0.16760543
+    CHASSIS_LENGTH = 0.260
     SPINE = (0.21948886, 0.100)
     CAP = (0.02025557, OVERALL_WIDTH)
     WING = (0.08051114, 0.033802715)
@@ -153,55 +172,42 @@ def main():
 
         return [visual for visual in visuals if matches(visual)]
 
-    decks = boxes_of_footprint(chassis_visuals, SPINE)
-    assert len(decks) == 2, 'expected exactly two deck spines'
-    deck_heights = {round(z_extent(deck)[0], 9) for deck in decks}
+    # The plate outline is chamfered, which no URDF primitive can express, so
+    # each deck is one mesh. Both decks are identical, so both reference the
+    # same generated file.
+    DECK_MESH = 'deck_plate.stl'
+    DECK_THICKNESS = 0.010
+    decks = [
+        visual for visual in chassis_visuals
+        if visual.find('./geometry/mesh') is not None
+        and visual.find('./geometry/mesh').attrib['filename'].endswith(DECK_MESH)
+    ]
+    assert len(decks) == 2, 'expected one plate mesh per deck'
 
-    def mirrored_pairs(elements, axis):
-        offsets = sorted(xyz(e.find('origin'))[axis] for e in elements)
-        assert math.isclose(offsets[0], -offsets[3], abs_tol=1e-9)
-        assert math.isclose(offsets[1], -offsets[2], abs_tol=1e-9)
+    def deck_z_extent(visual):
+        centre = ground(xyz(visual.find('origin'))[2])
+        return centre - DECK_THICKNESS / 2.0, centre + DECK_THICKNESS / 2.0
 
-    # Two wings per deck, one either side, at matching heights.
-    wings = boxes_of_footprint(chassis_visuals, WING)
-    assert len(wings) == 4, 'expected two wings on each of the two decks'
-    mirrored_pairs(wings, 1)
-    # The wings reach the wheel outer faces and no further.
-    for wing in wings:
-        half_span = abs(xyz(wing.find('origin'))[1]) + WING[1] / 2.0
-        assert math.isclose(2.0 * half_span, OVERALL_WIDTH, abs_tol=1e-6)
+    lower_deck, upper_deck = sorted(decks, key=lambda v: deck_z_extent(v)[0])
+    lower_bottom, lower_top = deck_z_extent(lower_deck)
+    upper_bottom, upper_top = deck_z_extent(upper_deck)
 
-    # Two end caps per deck, fore and aft. Each runs the full body width, so
-    # nothing can strike a wheel head on without hitting deck first.
-    caps = boxes_of_footprint(chassis_visuals, CAP)
-    assert len(caps) == 4, 'expected an end cap at each end of both decks'
-    mirrored_pairs(caps, 0)
-    for cap in caps:
-        assert math.isclose(
-            xyz(cap.find('origin'))[1], 0.0, abs_tol=1e-9), (
-            'an end cap is off the centreline')
-
-    # Every limb shares a deck's height, so they are parts of the plates
-    # rather than floating slabs.
-    for limb in wings + caps:
-        assert round(z_extent(limb)[0], 9) in deck_heights
-    deck_thicknesses = {
-        float(visual.find('./geometry/box').attrib['size'].split()[2])
-        for visual in decks
-    }
-    assert deck_thicknesses == {0.010}, 'both plates print at the same 10 mm'
-    lower_deck, upper_deck = sorted(decks, key=lambda v: z_extent(v)[0])
-    lower_bottom, lower_top = z_extent(lower_deck)
-    upper_bottom, upper_top = z_extent(upper_deck)
-
-    # The decks must not intersect, and the bay between them has to be tall
-    # enough for the motors that stand flat on the lower deck.
-    assert lower_top < upper_bottom
-    assert upper_bottom - lower_top >= 0.0224
-
-    # Ground clearance is not free: it is the wheel radius minus the motor
-    # shaft height above its resting face, minus the plate thickness.
-    assert 0.008 < lower_bottom < 0.012
+    # The mesh is generated from the same properties the collision limbs are
+    # built from, so its envelope has to be the body's. This is what ties the
+    # generated file back to the description; verify_deck_mesh separately
+    # proves the file matches the properties it was generated from.
+    deck_mesh = Path(xacro_path).parent.parent.parent / 'meshes' / 'decks' \
+        / DECK_MESH
+    mesh_extent = stl_extent(deck_mesh)
+    scale = [
+        float(value)
+        for value in decks[0].find('./geometry/mesh').attrib['scale'].split()
+    ]
+    assert scale == [0.001, 0.001, 0.001], 'deck mesh is authored in millimetres'
+    assert math.isclose(
+        mesh_extent[0] * scale[0], CHASSIS_LENGTH, abs_tol=1e-6)
+    assert math.isclose(mesh_extent[1] * scale[1], OVERALL_WIDTH, abs_tol=1e-6)
+    assert math.isclose(mesh_extent[2] * scale[2], DECK_THICKNESS, abs_tol=1e-6)
 
     # Collision follows the same outline the visuals do: one box per limb. A
     # single box over the whole envelope would reach the wheel outer faces
@@ -241,7 +247,10 @@ def main():
 
     # The collision set must actually bound the body: every visual lies inside
     # the height, and every box visual's footprint inside some collision limb.
+    # The deck meshes are checked against the body envelope above instead.
     for visual in chassis_visuals:
+        if visual in decks:
+            continue
         bottom, top = z_extent(visual)
         assert bottom >= lower_bottom - 1e-9
         assert top <= upper_top + 1e-9

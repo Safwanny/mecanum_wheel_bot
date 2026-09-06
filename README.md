@@ -864,9 +864,10 @@ Gazebo plugin/sensor instantiation.
 | File | Responsibility |
 | --- | --- |
 | `properties.xacro` | Shared robot and sensor dimensions, masses, poses, rates, ranges, and noise |
+| `scripts/generate_deck_mesh.py` | Generates the chamfered deck plate mesh from `properties.xacro`; `--check` guards against drift |
 | `materials.xacro` | Named visual materials |
 | `inertials.xacro` | Reusable inertial macros |
-| `chassis.xacro` | `base_footprint`, `base_link`, the dual-deck body visuals, and the bounding collision limbs |
+| `chassis.xacro` | `base_footprint`, `base_link`, the deck plate mesh visuals, and the bounding collision limbs |
 | `macros/mecanum_wheels.xacro` | Driven wheel links, visual meshes, cylinder collisions, inertials, and joints |
 | `macros/motors.xacro` | TT gearmotor links, visual mesh, and fixed joints |
 | `macros/components.xacro` | Deck-mounted battery and board links, visuals, inertials, and fixed joints |
