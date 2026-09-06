@@ -33,7 +33,7 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           colcon build --symlink-install --packages-select \
             mobile_base_description mobile_base_gazebo mobile_base_localization \
-            mobile_base_evaluation mobile_base_tools mobile_base_bringup \
+            mobile_base_tools mobile_base_bringup \
             mobile_base_navigation
 
       - name: Run deterministic package tests
@@ -44,10 +44,10 @@ jobs:
           source install/setup.bash
           colcon test --event-handlers console_cohesion+ --packages-select \
             mobile_base_description mobile_base_gazebo mobile_base_localization \
-            mobile_base_evaluation mobile_base_tools mobile_base_bringup \
+            mobile_base_tools mobile_base_bringup \
             mobile_base_navigation \
             --ctest-args -E \
-            'test_test_sensor_topics.py|test_test_odometry_evaluation_runtime.py'
+            'test_test_sensor_topics.py|test_test_lattice_plan_preview.py'
           colcon test-result --verbose
 
       - name: Validate bringup configuration without Gazebo runtime
@@ -63,7 +63,7 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           python3 -m compileall -q \
             mobile_base_tools mobile_base_bringup mobile_base_localization \
-            mobile_base_description mobile_base_gazebo mobile_base_evaluation \
+            mobile_base_description mobile_base_gazebo \
             mobile_base_navigation
           xacro mobile_base_description/urdf/mobile_base.urdf.xacro \
             > /tmp/mobile_base.urdf

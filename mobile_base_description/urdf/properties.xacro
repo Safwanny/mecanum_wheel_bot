@@ -1,10 +1,48 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!-- REP-103: +X forward, +Y left, +Z up. All dimensions are SI units. -->
+  <!-- chassis_* is the body bounding box: the footprint of both deck plates
+       and the full height from lower deck underside to upper deck top. It is
+       what the single collision box and the Nav2 footprint are derived from. -->
   <xacro:property name="chassis_length" value="0.216"/>
-  <xacro:property name="chassis_width" value="0.099"/>
-  <xacro:property name="chassis_height" value="0.050"/>
+  <xacro:property name="chassis_width" value="0.100"/>
   <xacro:property name="chassis_mass" value="1.80"/>
+
+  <!-- Dual-deck plates. The decks are 3D-printed sheet, not a solid block, so
+       the body is modelled as visuals on base_link plus one bounding collision.
+       Deck plate thickness is set by what prints reliably in PLA. -->
+  <xacro:property name="deck_thickness" value="0.010"/>
+  <xacro:property name="lower_deck_thickness" value="${deck_thickness}"/>
+  <xacro:property name="upper_deck_thickness" value="${deck_thickness}"/>
+  <!-- Clear air between the deck facing surfaces: houses the SBC and wiring,
+       and must exceed motor_height so the motors fit under the upper deck. -->
+  <xacro:property name="deck_gap" value="0.040"/>
+
+  <!-- TT gearmotor, measured off the vendored mesh (mm on export). The mesh
+       frame is: X along the body (round can at X=0, gearbox at high X), Y
+       across the two large flat gearbox faces, Z along the output shaft.
+       The motor rests on a large face, so its standing height is the Y span
+       and the shaft runs horizontally into the wheel. -->
+  <xacro:property name="motor_length" value="0.0695"/>
+  <xacro:property name="motor_height" value="0.0224"/>
+  <xacro:property name="motor_span" value="0.02994"/>
+  <!-- Shaft axis position in the mesh: along the body, and above the face the
+       motor rests on. The shaft is centred in the height, so a motor sitting
+       flat puts its shaft one motor_shaft_offset above the deck. -->
+  <xacro:property name="motor_shaft_x" value="0.053"/>
+  <xacro:property name="motor_shaft_offset" value="0.0112"/>
+  <!-- Outermost body point along the shaft axis. The 8.8 mm of exposed shaft
+       outboard of it slots into the wheel hub. -->
+  <xacro:property name="motor_body_outer" value="0.00755"/>
+  <!-- Fixed-joint children are lumped into base_link by the Gazebo URDF
+       reduction, so the motors carry negligible inertia and chassis_mass
+       remains the whole-body mass of the validated motion model. -->
+  <xacro:property name="motor_mass" value="1.0e-6"/>
+
+  <!-- Corner standoffs between the decks. Visual only. -->
+  <xacro:property name="standoff_radius" value="0.004"/>
+  <xacro:property name="standoff_x" value="0.098"/>
+  <xacro:property name="standoff_y" value="0.042"/>
 
   <!-- Measured from the four wheel STL envelopes (millimetres on export). -->
   <xacro:property name="wheel_radius" value="0.03074443"/>
@@ -20,14 +58,42 @@
   <xacro:property name="wheel_separation" value="0.134"/>
   <xacro:property name="wheel_diameter" value="${2.0 * wheel_radius}"/>
 
-  <xacro:property name="chassis_bottom_z" value="${0.25 * wheel_diameter}"/>
-  <xacro:property name="base_link_height" value="${chassis_bottom_z + chassis_height / 2.0}"/>
+  <!-- Vertical stack, ground referenced. The motors sit on the lower deck and
+       drive the wheels directly, so the deck top is pinned one shaft offset
+       below the wheel axle. That fixes ground clearance at 9.5 mm: the wheel
+       radius is what the whole stack hangs from. -->
+  <xacro:property name="lower_deck_top_z"
+                  value="${wheel_radius - motor_shaft_offset}"/>
+  <xacro:property name="lower_deck_bottom_z"
+                  value="${lower_deck_top_z - lower_deck_thickness}"/>
+  <xacro:property name="upper_deck_bottom_z"
+                  value="${lower_deck_top_z + deck_gap}"/>
+  <xacro:property name="upper_deck_top_z"
+                  value="${upper_deck_bottom_z + upper_deck_thickness}"/>
+  <xacro:property name="chassis_height"
+                  value="${upper_deck_top_z - lower_deck_bottom_z}"/>
+  <xacro:property name="chassis_bottom_z" value="${lower_deck_bottom_z}"/>
+
+  <!-- base_link is pinned to the height the validated motion model was
+       identified at. The body grew upward around it, so every existing tf
+       offset, controller gain and test expectation still holds. -->
+  <xacro:property name="base_link_height" value="0.040372215"/>
   <xacro:property name="wheel_z" value="${wheel_radius - base_link_height}"/>
+  <!-- Body geometry is authored ground referenced, then shifted into
+       base_link by this offset. -->
+  <xacro:property name="chassis_center_z"
+                  value="${(lower_deck_bottom_z + upper_deck_top_z) / 2.0
+                           - base_link_height}"/>
 
   <xacro:property name="camera_depth" value="0.002"/>
   <xacro:property name="camera_width" value="0.010"/>
   <xacro:property name="camera_height" value="0.005"/>
   <xacro:property name="camera_mass" value="0.06"/>
+  <!-- The camera is mounted on the front face of the upper deck, centred on
+       the plate's thickness. -->
+  <xacro:property name="camera_z"
+                  value="${(upper_deck_bottom_z + upper_deck_top_z) / 2.0
+                           - base_link_height}"/>
   <xacro:property name="camera_update_rate" value="20"/>
   <xacro:property name="camera_image_width" value="640"/>
   <xacro:property name="camera_image_height" value="480"/>
@@ -37,9 +103,19 @@
   <xacro:property name="camera_noise_mean" value="0.0"/>
   <xacro:property name="camera_noise_stddev" value="0.005"/>
 
-  <!-- Simulated 360-degree planar LiDAR. The link origin is the scan plane. -->
-  <xacro:property name="lidar_radius" value="0.020"/>
-  <xacro:property name="lidar_height" value="0.008"/>
+  <!-- Simulated 360-degree planar LiDAR, shaped after the D500 kit: a square
+       fixed base carrying a cylindrical rotating head. The link origin is the
+       scan plane, at mid height of the head. -->
+  <xacro:property name="lidar_base_size" value="0.048"/>
+  <xacro:property name="lidar_base_height" value="0.010"/>
+  <xacro:property name="lidar_head_radius" value="0.019"/>
+  <xacro:property name="lidar_head_height" value="0.010"/>
+  <!-- Collision and inertia use one box bounding base and head together. -->
+  <xacro:property name="lidar_height"
+                  value="${lidar_base_height + lidar_head_height}"/>
+  <!-- Centre of that bounding box, relative to the scan plane. -->
+  <xacro:property name="lidar_collision_z"
+                  value="${-lidar_base_height / 2.0}"/>
   <xacro:property name="lidar_mass" value="0.10"/>
   <xacro:property name="lidar_x" value="0.0"/>
   <xacro:property name="lidar_y" value="0.0"/>
@@ -54,18 +130,25 @@
   <xacro:property name="lidar_noise_stddev" value="0.01"/>
 
   <!-- Simulated IMU. Noise values are standard deviations in SI units. -->
-  <xacro:property name="imu_length" value="0.050"/>
-  <xacro:property name="imu_width" value="0.050"/>
-  <xacro:property name="imu_height" value="0.008"/>
+  <xacro:property name="imu_length" value="0.025"/>
+  <xacro:property name="imu_width" value="0.025"/>
+  <xacro:property name="imu_height" value="0.004"/>
   <xacro:property name="imu_mass" value="0.03"/>
   <xacro:property name="imu_x" value="0.0"/>
   <xacro:property name="imu_y" value="0.0"/>
-  <!-- Compact sensor stack: IMU on the chassis, LiDAR on the IMU. -->
-  <xacro:property name="chassis_top_z" value="${chassis_height / 2.0}"/>
-  <xacro:property name="imu_z" value="${chassis_top_z + imu_height / 2.0}"/>
-  <!-- lidar_link is the scan plane at the top of the LiDAR cylinder. -->
+  <!-- Sensors are placed ground referenced, then shifted into base_link.
+       chassis_top_z is the upper deck top face, the mounting surface. -->
+  <xacro:property name="chassis_top_z"
+                  value="${upper_deck_top_z - base_link_height}"/>
+  <!-- The IMU hangs under the upper deck, inside the electronics bay, where
+       it is shielded and close to the rotation centre. -->
+  <xacro:property name="imu_z"
+                  value="${upper_deck_bottom_z - imu_height / 2.0
+                           - base_link_height}"/>
+  <!-- lidar_link is the scan plane, mid height of the rotating head. -->
   <xacro:property name="lidar_z"
-                  value="${imu_z + imu_height / 2.0 + lidar_height}"/>
+                  value="${upper_deck_top_z + lidar_base_height
+                           + lidar_head_height / 2.0 - base_link_height}"/>
   <xacro:property name="imu_update_rate" value="50.0"/>
   <xacro:property name="imu_angular_velocity_noise_mean" value="0.0"/>
   <xacro:property name="imu_angular_velocity_noise_stddev" value="0.002"/>

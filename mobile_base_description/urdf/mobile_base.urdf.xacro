@@ -9,6 +9,7 @@
   <xacro:include filename="properties.xacro"/>
   <xacro:include filename="chassis.xacro"/>
   <xacro:include filename="macros/mecanum_wheels.xacro"/>
+  <xacro:include filename="macros/motors.xacro"/>
   <xacro:include filename="base.xacro"/>
   <xacro:include filename="camera.xacro"/>
   <xacro:include filename="lidar.xacro"/>

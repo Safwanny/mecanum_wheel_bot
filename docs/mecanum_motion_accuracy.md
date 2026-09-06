@@ -1,5 +1,15 @@
 # Historical mecanum motion-accuracy experiments
 
+> **Historical record.** The odometry evaluation campaign, its launch file
+> (`odometry_evaluation.launch.py`), the `evaluation_campaign` and
+> `odometry_test_runner` entry points, the `mobile_base_evaluation` ground-truth
+> package and the `navigation_narrow` world have all been removed from the
+> repository. The commands below no longer run. The measurements and the
+> calibration decision they produced are kept because a live constant still
+> depends on them: `sum_of_robot_center_projection_on_X_Y_axis = 0.12521` in
+> `mobile_base_bringup/config/controllers.yaml` is justified here and nowhere
+> else. Treat this file as evidence, not as instructions.
+
 > This document preserves measurements from the retired passive-roller
 > architecture and the experiments that led to the current implementation. The
 > active repository now has one contact path: four single-cylinder wheel

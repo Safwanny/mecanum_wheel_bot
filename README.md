@@ -11,7 +11,6 @@ Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platfor
 | `mobile_base_bringup` | ros2_control configuration and top-level launch files |
 | `mobile_base_localization` | Planar EKF, SLAM Toolbox mapping, Nav2 map serving, and holonomic AMCL |
 | `mobile_base_navigation` | Costmaps, planning, control, behavior tree, command arbitration and e-stop |
-| `mobile_base_evaluation` | Evaluation-only, identity-selected Gazebo ground truth |
 | `mobile_base_tools` | Odometry-path visualization and repeatable motion checks |
 
 The packages are independent of the existing arm stack.
@@ -23,32 +22,70 @@ simulation: set an initial pose, give it a goal, and it drives there avoiding
 obstacles, repeatedly, behind a latching emergency stop.**
 Phase 1 delivered the mecanum simulation and control stack, raw wheel odometry,
 fused wheel/IMU odometry, explicit TF ownership,
-timestamp and TF contract validation, repeatable motion evaluation, and an
-isolated per-repetition campaign lifecycle with bounded cleanup and resumable,
-non-overwriting results.
+timestamp and TF contract validation.
 
-The completed raw and fused campaigns support these engineering conclusions:
-
-- raw and fused odometry validation are complete across the motion profiles;
-- fusion substantially improves yaw accuracy and cross-axis drift;
-- endpoint position performance is broadly similar overall;
-- square-path closure improves with fusion;
-- startup outliers remain in the primary results rather than being removed or
-  replaced; and
-- no controller, EKF, geometry, trajectory, sensor-rate, or evaluation-threshold
-  tuning was required to close Phase 1.
+The raw and fused odometry campaigns that closed Phase 1 concluded that fusion
+substantially improves yaw accuracy and cross-axis drift, that endpoint position
+performance is broadly similar either way, and that square-path closure improves
+with fusion. **The campaign tooling and its result sets have since been removed
+from the repository**, so those numbers are no longer reproducible here; the
+findings and the calibration decision they justify are kept in
+[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md) as a
+historical record.
 
 The canonical single-cylinder, direction-dependent wheel contact implementation
 has been manually validated through simulation startup, controller operation,
 mecanum motion, odometry/EKF, SLAM mapping, occupancy-map save, saved-map loading,
 and AMCL localization. Phase 2 adds SLAM Toolbox mapping and saved-map AMCL
-localization. Earlier diagnostic campaigns and retired contact experiments are
-recorded in
-[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md). Phase 3
+localization. Phase 3
 adds the full Nav2 stack: costmaps and a global planner (3a), the command chain
 built but disconnected (3b), and autonomous driving behind arbitration and an
 e-stop (3c). Everything is verified in simulation only; hardware commissioning
 is later work.
+
+### Two motion profiles
+
+**`primitive` is the default.** The robot turns to face each leg of the path,
+then drives it — one motion at a time, never blending rotation with
+translation. Paths are eight-heading polylines, so straight runs and 45-degree
+diagonals only.
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+**`holonomic`** is the original SmacPlanner2D + MPPI stack, which blends
+translation and rotation freely. It is the profile every measurement in this
+README was taken against.
+
+```bash
+ros2 launch mobile_base_navigation planning.launch.py motion_profile:=holonomic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Both are described in
+[`ARCHITECTURE.md`](ARCHITECTURE.md#motion-profiles). Two things to know before
+relying on either:
+
+- **Speeds were doubled** — `primitive` runs 0.20 m/s / 0.60 rad/s, `holonomic`
+  0.30 m/s / 1.20 rad/s. That is 2-4x anything characterised, and the stopping
+  distances recorded below were measured at 0.12 m/s. They no longer describe
+  the current configuration.
+- **Navigation waits for an initial pose.** Nothing activates until you set
+  **2D Pose Estimate** in RViz; a costmap built before then is drawn against a
+  pose you never supplied. Pass `autostart:=true` to skip the wait.
+
+### Camera view
+
+The camera has its own window and its own command. Start any stack first, then
+in another terminal:
+
+```bash
+ros2 launch mobile_base_bringup camera_view.launch.py
+```
+
+It attaches to whatever is already running rather than starting a robot of its
+own. Add `image_topic:=/your/topic` to point it elsewhere, or
+`use_sim_time:=false` on hardware.
 
 ## Quick start: empty world to autonomous navigation
 
@@ -62,13 +99,13 @@ Build and source once per shell:
 cd "$HOME/ros2_ws" && source /opt/ros/jazzy/setup.bash && colcon build --symlink-install && source install/setup.bash
 ```
 
-### Stage 1 — play in an empty world
+### Stage 1 — drive it by hand
 
 No map, no localization, no navigation. Just the robot, so you can drive it by
 hand and confirm the base works.
 
 ```bash
-ros2 launch mobile_base_bringup simulation.launch.py world:=empty
+ros2 launch mobile_base_bringup simulation.launch.py world:=my_world
 ```
 
 In a second terminal, drive it. Teleop needs its own terminal because it reads
@@ -91,8 +128,10 @@ translation with rotation. To strafe, publish directly:
 ros2 topic pub -r 20 /mobile_base_controller/reference geometry_msgs/msg/TwistStamped "{header: {frame_id: base_link}, twist: {linear: {y: 0.1}}}"
 ```
 
-Other worlds are available: `navigation_basic` (a 10 x 8 m room with an
-interior wall and obstacles) and `navigation_narrow`.
+Two worlds ship. `my_world` is a 10 x 10 m sealed apartment: six rooms off a
+central hall, doorways from 1.20 m down to 0.60 m. `navigation_basic` is a
+10 x 8 m room with an interior wall and obstacles, and it is the one with a
+maintained saved map.
 
 ### Stage 2 — map the world
 
@@ -155,10 +194,21 @@ ros2 launch mobile_base_navigation planning.launch.py world:=navigation_basic ma
 
 Three things, in this order:
 
-**1. Set the initial pose promptly.** Click **2D Pose Estimate** as in stage 4.
-The costmaps cannot activate until AMCL publishes `map -> odom`, and the
-lifecycle manager gives up after about a minute. If you are slow, do not
-relaunch — set the pose, then re-trigger bringup:
+**1. Set the initial pose.** Click **2D Pose Estimate** as in stage 4. Nothing
+in the navigation stack activates before you do — every server sits
+`unconfigured` and the `nav_autostart` node brings them up the moment AMCL
+publishes `/amcl_pose`. There is no rush and no timeout to beat; a costmap
+brought up any earlier would be drawn against a pose you never supplied.
+
+Confirm it worked — both must say `active [3]`:
+
+```bash
+ros2 lifecycle get /planner_server
+```
+
+If you would rather everything came up at launch, pass `autostart:=true`. To
+bring it up by hand instead, launch with `autostart_on_localization:=false` and
+call:
 
 ```bash
 ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
@@ -172,10 +222,19 @@ this:
 ros2 service call /estop_gate/reset std_srvs/srv/Trigger
 ```
 
-**3. Give it a goal.** Click **2D Goal Pose** in RViz. The robot plans a path
-around obstacles, drives there, and stops. Click again for the next goal, as
-often as you like — the pose it reaches is simply where the next goal starts
+**3. Give it a goal.** Click **2D Goal Pose** in RViz. On the default
+`primitive` profile the robot **turns to face the first leg, then drives it**,
+repeating that per leg and settling the goal heading at the end — so expect
+visible stop-turn-go rather than a smooth curve. Click again for the next goal,
+as often as you like — the pose it reaches is simply where the next goal starts
 from.
+
+Drag the goal arrow to set the final heading; the robot rotates onto it after
+arriving. To watch which primitive is running:
+
+```bash
+ros2 topic echo /cmd_vel_nav --field twist
+```
 
 Goals can also be sent from the CLI:
 
@@ -245,9 +304,7 @@ the same environment. Keep every YAML beside its referenced image file.
 | Gazebo world | Intended use | Saved-map pair |
 | --- | --- | --- |
 | `navigation_basic` | Primary Phase 2 room and obstacle test | `maps/mobile_base/navigation_basic.{yaml,pgm}` |
-| `navigation_narrow` | Narrow corridors, turns, and close-wall scan matching | `maps/mobile_base/navigation_narrow.{yaml,pgm}` |
-| `empty` | Motion and controller smoke tests; too little structure for useful localization | No maintained Phase 2 map |
-| `sensor_test` | Camera, LiDAR, and IMU validation | No maintained Phase 2 map |
+| `my_world` | 10 x 10 m sealed apartment: six rooms, an L-shaped kitchen and living room, doorways 1.20 m down to 0.60 m | Map it yourself; none is maintained |
 
 Generated maps and pose graphs live under `$HOME/ros2_ws/maps/mobile_base/`.
 That runtime directory is ignored by Git. Saving a map with an existing
@@ -257,8 +314,8 @@ basename replaces that local YAML/PGM pair.
 ros2_ws/maps/mobile_base/
 ├── navigation_basic.yaml
 ├── navigation_basic.pgm
-├── navigation_narrow.yaml      # after mapping navigation_narrow
-└── navigation_narrow.pgm       # after mapping navigation_narrow
+├── my_world.yaml               # after mapping my_world
+└── my_world.pgm                # after mapping my_world
 ```
 
 ### One-time setup
@@ -475,36 +532,6 @@ Both lifecycle nodes must report `active [3]`. `/amcl`, `/map_server`,
 Press `k` and then `Ctrl-C` in Terminal 5. Press `Ctrl-C` in Terminal 4 and wait
 for Gazebo and RViz to close.
 
-### Repeat the complete test for `navigation_narrow`
-
-Use the same terminal order and teleop command. Change only the world and map
-basename in the mapping, save, and localization commands:
-
-```bash
-# Mapping Mode
-ros2 launch mobile_base_bringup mapping.launch.py \
-  world:=navigation_narrow \
-  rviz:=true gui:=true render_engine:=ogre2
-
-# Save while Mapping Mode is still running
-ros2 run nav2_map_server map_saver_cli \
-  -t /map \
-  -f "$HOME/ros2_ws/maps/mobile_base/navigation_narrow" \
-  --ros-args \
-  -p map_subscribe_transient_local:=true \
-  -p save_map_timeout:=10.0
-
-# After stopping Mapping Mode, start Localization Mode
-ros2 launch mobile_base_bringup localization.launch.py \
-  world:=navigation_narrow \
-  map:="$HOME/ros2_ws/maps/mobile_base/navigation_narrow.yaml" \
-  rviz:=true gui:=true render_engine:=ogre2
-```
-
-The narrow-world visual test should pay particular attention to parallel wall
-alignment, duplicated corridor edges, scan matching during turns, lateral
-motion near walls, and particle convergence after emerging from a corridor.
-
 ### Hardware-only mapping and localization
 
 For an already-running hardware/base stack that supplies `/scan`,
@@ -548,26 +575,6 @@ Mapping validation covers live map updates, all holonomic directions, loop
 closure, YAML/PGM saving, and map reload. Localization validation covers map
 reload, RViz initial-pose setting, particle convergence, deliberately offset
 pose recovery, holonomic motion, covariance behavior, and restart/reload.
-
-### Quantitative localization evaluation
-
-Gazebo ground truth remains evaluation-only. For a quantitative localization
-run, start the existing identity-based selector for the chosen world and record
-it beside AMCL and TF:
-
-```bash
-ros2 run mobile_base_evaluation ground_truth_selector --ros-args \
-  -p world:=navigation_basic \
-  -p gz_topic:=/world/navigation_basic/dynamic_pose/info \
-  -p robot_entity:=mobile_base \
-  -p output_topic:=/mobile_base/evaluation/ground_truth
-ros2 bag record /mobile_base/evaluation/ground_truth /amcl_pose /tf /tf_static
-```
-
-Only compare poses after aligning the saved map and Gazebo world origins.
-Measure planar position error, yaw error, RMSE, maximum position error, and
-convergence time from the recording; no acceptance thresholds are asserted
-until measurements establish a baseline.
 
 ### Phase 2 tuning and limitations
 
@@ -789,9 +796,6 @@ rectangular and legged bases, does not apply here.
 
 ### Phase 3 tuning and limitations
 
-`navigation_narrow` is out of scope: it has no saved map, and the north gap in
-`navigation_basic` already exercises the same geometry.
-
 Goal error can exceed `xy_goal_tolerance`. The planner has its own `tolerance`
 of 0.125 m for goals it cannot reach exactly, and the checker adds 0.15 m on
 top, so a goal placed against an obstacle can settle up to ~0.275 m out. A
@@ -807,6 +811,27 @@ navigation chain, and two smoothers would both remap onto the controller
 reference and break the single-arbiter rule.
 The harness needs no Gazebo and is a candidate for CI once planning regressions
 are worth asserting.
+
+**Speeds are no longer the ones these numbers were measured at.** Both profiles
+were doubled by request: `primitive` runs 0.20 m/s / 0.60 rad/s and `holonomic`
+0.30 m/s / 1.20 rad/s, against a characterised envelope of 0.10 m/s /
+0.30 rad/s. The stopping distances below (0.065 m on the e-stop service,
+0.120 m on the deadman) were taken at 0.12 m/s and scale roughly with speed, so
+treat them as a lower bound now. The velocity smoother's `[0.5, 0.5, 2.0]`
+ceiling is the only remaining hard bound; the static tests assert both
+controllers stay under it. Recovery rotation was doubled too, which is the
+least comfortable part — recoveries run close to obstacles, and a spin that
+misjudges clearance now does so twice as fast.
+
+On the `primitive` profile the goal-error picture differs: the lattice ends its
+path at a cell centre within its own `tolerance` of 0.05 m, but the goal checker
+still terminates the run at 0.15 m, so measured error clusters near 0.15 m
+rather than near 0.05 m. That is a property of the checker, not of the planner.
+
+The `primitive` profile has no accuracy campaign, no stopping-distance
+measurement of its own, and no hardware exposure. It is the default because its
+motion is legible, not because it is better characterised — `holonomic` remains
+the profile every number in this README was measured against.
 
 ## Units and CAD source
 
@@ -841,9 +866,10 @@ Gazebo plugin/sensor instantiation.
 | `properties.xacro` | Shared robot and sensor dimensions, masses, poses, rates, ranges, and noise |
 | `materials.xacro` | Named visual materials |
 | `inertials.xacro` | Reusable inertial macros |
-| `chassis.xacro` | `base_footprint`, `base_link`, and body geometry |
+| `chassis.xacro` | `base_footprint`, `base_link`, the dual-deck body visuals, and the single bounding collision |
 | `macros/mecanum_wheels.xacro` | Driven wheel links, visual meshes, cylinder collisions, inertials, and joints |
-| `base.xacro` | Chassis plus four mecanum wheel assembly |
+| `macros/motors.xacro` | TT gearmotor links, visual mesh, and fixed joints |
+| `base.xacro` | Chassis plus the four wheel and four motor assemblies |
 | `camera.xacro` | Front RGB camera link, optical frame, fixed joints, geometry, and inertia |
 | `lidar.xacro` / `imu.xacro` | Fixed physical sensor links, joints, geometry, and inertia |
 | `mobile_base.ros2_control.xacro` | ros2_control hardware and command/state interfaces |
@@ -890,7 +916,7 @@ The Gazebo launch requires `ros_gz_sim`, `ros_gz_bridge`, and `gz_ros2_control`.
 cd ~/ros2_ws
 colcon build --symlink-install --packages-select \
   mobile_base_description mobile_base_gazebo mobile_base_localization \
-  mobile_base_evaluation mobile_base_tools mobile_base_bringup
+  mobile_base_tools mobile_base_bringup
 source install/setup.bash
 xacro src/mobile_base/mobile_base_description/urdf/mobile_base.urdf.xacro > /tmp/mobile_base.urdf
 check_urdf /tmp/mobile_base.urdf
@@ -1031,19 +1057,19 @@ The world supplies the Sensors system with Ogre2 and the IMU system. No
 The sensor definitions themselves do not add localization, SLAM, Nav2, or
 sensor fusion; the top-level simulation starts the Phase 1 EKF by default.
 
-Four self-contained worlds are installed; none downloads external models:
+Two self-contained worlds are installed; neither downloads external models:
 
 ```bash
-ros2 launch mobile_base_bringup simulation.launch.py world:=empty
-ros2 launch mobile_base_bringup simulation.launch.py world:=sensor_test
 ros2 launch mobile_base_bringup simulation.launch.py world:=navigation_basic
-ros2 launch mobile_base_bringup simulation.launch.py world:=navigation_narrow
+ros2 launch mobile_base_bringup simulation.launch.py world:=my_world
 ```
 
-`sensor_test` places a wall at `x=3 m`, a box to the left, and a cylinder to the
-right for recognizable scan returns. `navigation_basic` is a room with walls,
-routes, boxes, and a column. `navigation_narrow` contains a 1 m corridor,
-doorway, L-shaped turn, and dead end. An absolute custom file works too:
+`navigation_basic` is a 10 x 8 m room with walls, routes, boxes and a column,
+and is the default. `my_world` is a 10 x 10 m sealed apartment: six rooms off a
+central hall, an L-shaped kitchen and living room, and doorways of 1.20, 1.00,
+0.90, 0.80, 0.70 and 0.60 m. Every point on its floor is within LiDAR range of
+walls on both axes, which is what makes it mappable. An absolute custom file
+works too:
 
 ```bash
 ros2 launch mobile_base_bringup simulation.launch.py \
@@ -1117,11 +1143,6 @@ Gazebo model state ──> identity selector ──> evaluation only
               odom -> base_footprint
 ```
 
-Gazebo ground truth never feeds the controller, EKF, TF, SLAM, or navigation.
-`mobile_base_evaluation/ground_truth_selector` subscribes directly to Gazebo
-Transport and selects the configured model by name before publishing one
-`PoseStamped`. Entity ordering is therefore irrelevant.
-
 In the default `localization:=true` mode, `ekf_filter_node` is the sole
 publisher of `odom -> base_footprint`; the mecanum controller still publishes
 raw odometry but has `enable_odom_tf:=false`. `robot_state_publisher` owns
@@ -1140,14 +1161,14 @@ Simulation with EKF:
 
 ```bash
 ros2 launch mobile_base_bringup simulation.launch.py \
-  world:=sensor_test localization:=true rviz:=true
+  world:=my_world localization:=true rviz:=true
 ```
 
 Raw-controller diagnostic mode:
 
 ```bash
 ros2 launch mobile_base_bringup simulation.launch.py \
-  world:=empty localization:=false rviz:=true
+  world:=navigation_basic localization:=false rviz:=true
 ```
 
 ## Phase 1 runtime contracts
@@ -1158,11 +1179,11 @@ With a fused simulation running, validate the configured IMU (50 Hz), LiDAR
 ```bash
 ros2 run mobile_base_tools timestamp_validator \
   --mode fused --duration 10 \
-  --output phase1_results/diagnostics/timestamp_fused.json \
+  --output diagnostics/timestamp_fused.json \
   --ros-args -p use_sim_time:=true
 ros2 run mobile_base_tools tf_validator \
   --mode fused --duration 10 \
-  --output phase1_results/diagnostics/tf_fused.json \
+  --output diagnostics/tf_fused.json \
   --ros-args -p use_sim_time:=true
 ```
 
@@ -1178,223 +1199,6 @@ wheel connections, advancing dynamic transforms, sane values and stamps, no
 loops or multiple parents, no `map -> odom`, no evaluation-only frames, and the
 single-owner rule. In fused mode the EKF must publish TF while the controller's
 `enable_odom_tf` is false; raw mode requires the inverse.
-
-## Raw and filtered odometry evaluation
-
-`mobile_base_tools` compares Gazebo ground truth, raw controller odometry, and
-`/odometry/filtered`. It samples the latest fresh pose from all three sources,
-records source timestamps, and rejects excessive skew or stale data.
-
-The simulated LiDAR maximum range is `4.0 m`. Its `/scan` topic, `lidar_link`
-frame, 720 samples, 360-degree field of view, 10 Hz update rate, minimum range,
-resolution, and noise remain unchanged.
-
-Build and source the workspace:
-
-```bash
-cd ~/ros2_ws
-source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --event-handlers console_direct+
-source install/setup.bash
-```
-
-Run one forward test once:
-
-```bash
-ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
-  test_profile:=forward_1m repetitions:=1 \
-  output_dir:=phase1_results/smoke_test
-```
-
-Run all 11 profiles with the default five repetitions:
-
-```bash
-ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
-  test_profile:=all repetitions:=0 \
-  output_dir:=phase1_results/fused_comparison
-```
-
-Preserve a controller-only baseline separately:
-
-```bash
-ros2 launch mobile_base_bringup odometry_evaluation.launch.py \
-  test_profile:=all repetitions:=0 \
-  evaluation_mode:=raw_only localization:=false \
-  output_dir:=phase1_results/raw_baseline
-```
-
-For the formal raw and fused fresh-process campaign, use a new empty output
-directory:
-
-```bash
-ros2 run mobile_base_tools evaluation_campaign \
-  --modes raw_only,raw_and_filtered --repetitions 5 \
-  --output-dir phase1_results/formal_campaign
-```
-
-Every campaign repetition launches in its own process session. The lifecycle
-tracks descendants, applies bounded `SIGINT -> SIGTERM -> SIGKILL` cleanup,
-reaps children, requires zero remaining campaign processes, and waits for the
-ROS graph to settle before another repetition starts. The campaign manifest is
-updated atomically after every profile launch. An interrupted campaign is
-marked `interrupted`; `--resume` skips completed cases while retaining every
-prior attempt and launch log. Without `--resume`, the tool refuses to write
-into a non-empty directory.
-
-Use an explicit writable output directory for retained evidence; the fallback
-is `/tmp/mobile_base_phase1`, never a hardcoded workspace source path. The
-launch defaults to the flat `empty` world, `evaluation_mode:=raw_and_filtered`,
-`localization:=true`, `gui:=false`, and `rviz:=false`. For a preserved raw-only
-baseline, use `evaluation_mode:=raw_only localization:=false`. Other arguments
-are `world`, `config_file`, `robot_entity`, `shutdown_on_complete`, `gui`, and
-`rviz`. Profiles and safe velocities are defined in
-`mobile_base_tools/config/odometry_tests.yaml`; `repetitions:=0` uses the
-five-repetition YAML value.
-
-Complete evaluation output is generated inside the ignored
-`phase1_results/` directory. Campaign manifests, summaries, trajectories,
-and plots remain local evidence and are intentionally excluded from source
-commits. Copy or back up that directory separately when evidence must be
-retained across machines.
-
-Formal Phase 1 runtime validation is complete: all raw and fused profile runs
-were collected with the isolated lifecycle, and the retained interrupted
-attempt and startup outliers remain part of the evidence. The generated
-campaign data stays local under `phase1_results/`; the conclusions relevant to
-the maintained software baseline are summarized in "Phase 1 status" above.
-
-Each repetition publishes zero velocity, verifies measured velocity is below
-threshold, resets the named Gazebo model through `/world/empty/set_pose`,
-verifies the identity-selected pose reaches configurable position/yaw
-tolerances, settles, and records fresh relative initial poses. Single and
-multi-segment runs have explicit `profile_timeout`; square segments additionally
-have `segment_timeout`. All failure paths send repeated zero commands.
-
-The selected output directory contains:
-
-```text
-summary.json
-summary.csv
-runs.csv
-trajectories/<profile>_run_<number>.csv
-plots/<profile>_run_<number>.png
-plots/position_error_comparison.png
-plots/yaw_error_comparison.png
-plots/cross_axis_drift_comparison.png
-plots/repeatability_spread.png
-plots/final_displacement_comparison.png
-plots/square_path_closure.png
-plots/raw_vs_filtered_position_error.png
-plots/raw_vs_filtered_yaw_error.png
-plots/raw_vs_filtered_path_length_error.png
-plots/filtered_repeatability_spread.png
-plots/motion_end_vs_settled_overshoot.png
-plots/per_profile_improvement.png
-```
-
-Position error is the Euclidean difference between final odometry and Gazebo
-displacements. Yaw error compares normalized heading changes.
-Cross-axis drift is unintended lateral motion during forward/backward tests,
-unintended longitudinal motion during strafing, or cross-track error during
-diagonal motion. Path-length error compares accumulated odometry and Gazebo
-path lengths. Mean, median, minimum, maximum, and standard deviation quantify
-repeatability across successful repetitions; failed runs remain listed.
-Motion-end poses are captured when the nonzero command stops, while
-settled-final poses are captured after repeated zero commands and settling.
-Improvement values are raw error minus filtered error, so positive is better.
-The report labels filtered position performance as better, similar, or worse.
-
-Gazebo model pose is evaluation-only. Never use it as robot odometry or as
-input to localization, sensor fusion, SLAM, navigation, or TF publication.
-
-## Measurement-only mecanum motion diagnostics
-
-The odometry evaluator also records the complete drivetrain chain without
-changing any physical or controller parameter. The preserved Phase 2 baseline
-for this campaign is commit
-`e514a54de05430699203a05f46d845adb576021f`.
-
-Each trajectory CSV records the requested body twist, the body reference
-accepted by `mecanum_drive_controller`, expected FL/FR/RR/RL wheel rates,
-controller-reported and `/joint_states` wheel rates, wheel positions, raw and
-filtered odometry twist, IMU yaw rate, pose-derived Gazebo body velocity, and
-simulation timestamps. Per-run JSON adds wheel RMSE, steady-state error, peak
-error, rise time, overshoot, settling time, ideal-versus-Gazebo chassis
-metrics, odometry-versus-Gazebo metrics, and the evidence classification.
-Gazebo data remains evaluation-only and is never connected to control, EKF,
-SLAM, AMCL, navigation, or TF.
-
-First run all ten short, low-speed primitives from isolated fresh simulations:
-
-```bash
-cd ~/ros2_ws
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
-ros2 run mobile_base_tools evaluation_campaign \
-  --profiles diagnostic_low_forward,diagnostic_low_backward,diagnostic_low_left,diagnostic_low_right,diagnostic_low_rotate_positive,diagnostic_low_rotate_negative,diagnostic_low_forward_left,diagnostic_low_forward_right,diagnostic_low_backward_left,diagnostic_low_backward_right \
-  --modes raw_and_filtered --repetitions 1 \
-  --output-dir phase1_results/mecanum_low_speed_baseline
-```
-
-Then run the ten nominal primitives, also with one fresh simulation each:
-
-```bash
-ros2 run mobile_base_tools evaluation_campaign \
-  --profiles forward_1m,backward_1m,strafe_left_1m,strafe_right_1m,rotate_positive_90deg,rotate_negative_90deg,diagonal_forward_left,diagonal_forward_right,diagonal_backward_left,diagonal_backward_right \
-  --modes raw_and_filtered --repetitions 1 \
-  --output-dir phase1_results/mecanum_nominal_baseline
-```
-
-Inspect `campaign_summary.json`, then each isolated repetition's
-`summary.json`, `run_results/*.json`, `trajectories/*.csv`, plots, and
-`launch.log`. Root-cause labels use a documented 10 percent threshold:
-
-- Case A: expected wheel rates and measured wheel rates diverge.
-- Case B: wheel tracking is good but Gazebo chassis motion diverges.
-- Case C: Gazebo chassis motion is good but wheel odometry diverges.
-- Case D: wheel error is concentrated in acceleration/deceleration transients.
-- `within_threshold`: none of those stages exceeds the threshold.
-
-The baseline findings and calibration decision are recorded in
-[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md).
-
-Acceleration/deceleration behavior remains visible in the time series and the
-rise/overshoot/settling metrics. Do not tune radius, rotational geometry,
-roller/contact parameters, acceleration limits, or physics settings until the
-primitive evidence identifies a dominant case.
-
-Troubleshooting:
-
-- No ground-truth pose: confirm the `empty` world is running and
-  `ground_truth_selector` reports that it selected `mobile_base` from
-  `/world/empty/dynamic_pose/info`.
-- Wrong robot entity: keep `robot_entity:=mobile_base`, matching the simulation
-  spawn name, and use the deterministic world with one dynamic model.
-- Controller inactive: check
-  `ros2 control list_controllers`; `mobile_base_controller` must be active.
-- Robot does not stop: inspect competing publishers on
-  `/mobile_base_controller/reference`; the evaluator aborts if measured twist
-  remains above its stop threshold.
-- Output directory not writable: choose an absolute writable `output_dir`.
-- Plots unavailable: install the `python3-matplotlib` rosdep and use the
-  non-interactive backend configured by the evaluator.
-- Stale simulation time: verify `ros2 topic echo /clock --once`; all evaluation
-  nodes use simulation time.
-- Timeout before completing motion: check for collisions, inactive control, or
-  stale Gazebo pose data before increasing a YAML timeout.
-- Reset service unavailable: verify `/world/empty/set_pose` is present and has
-  type `ros_gz_interfaces/srv/SetEntityPose`.
-- Missing samples in a report: inspect zero, stale, non-finite, or
-  nonmonotonic timestamps in the evaluator log.
-
-The EKF does not correct the physical trajectory or eliminate wheel slip. IMU
-yaw rate principally improves angular-state observability and orientation
-consistency; planar position may still drift because no absolute XY position
-sensor is fused. Phase 1 provides no autonomous navigation. Phase 2 adds only
-SLAM Toolbox mapping and saved-map localization; autonomous navigation remains
-out of scope.
 
 ## Teleoperation
 

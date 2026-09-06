@@ -29,10 +29,8 @@ REQUIRED_SYSTEMS = {
     'gz-sim-imu-system',
 }
 EXPECTED_WORLDS = {
-    'empty.sdf',
-    'sensor_test.sdf',
     'navigation_basic.sdf',
-    'navigation_narrow.sdf',
+    'my_world.sdf',
 }
 
 

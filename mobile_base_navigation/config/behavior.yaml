@@ -31,6 +31,9 @@ behavior_server:
     # Kept below the stock 1.0 / 0.4 / 3.2 so that if a motion behavior is ever
     # enabled it starts inside the 0.30 rad/s envelope everything was
     # characterised at, rather than several times outside it.
-    max_rotational_vel: 0.60
-    min_rotational_vel: 0.20
+    # Doubled alongside the drive speeds. Recoveries run close to obstacles,
+    # so this is the one place where the doubling is least comfortable: a spin
+    # that misjudges clearance now does so twice as fast.
+    max_rotational_vel: 1.20
+    min_rotational_vel: 0.40
     rotational_acc_lim: 2.0

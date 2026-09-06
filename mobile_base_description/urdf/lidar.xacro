@@ -1,25 +1,41 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:macro name="mobile_base_lidar" params="prefix">
+    <!-- lidar_link is the scan plane, at mid height of the rotating head.
+         Visuals are split into the square fixed base and the cylindrical
+         rotating head so the model reads as a D500 kit; collision and inertia
+         stay one box bounding both. -->
     <link name="${prefix}lidar_link">
       <visual>
-        <origin xyz="0 0 ${-lidar_height / 2.0}" rpy="0 0 0"/>
+        <origin
+          xyz="0 0 ${-lidar_head_height / 2.0 - lidar_base_height / 2.0}"
+          rpy="0 0 0"/>
         <geometry>
-          <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+          <box size="${lidar_base_size} ${lidar_base_size}
+                     ${lidar_base_height}"/>
+        </geometry>
+        <material name="lidar_base_grey"/>
+      </visual>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${lidar_head_radius}"
+                    length="${lidar_head_height}"/>
         </geometry>
         <material name="sensor_grey"/>
       </visual>
       <collision>
-        <origin xyz="0 0 ${-lidar_height / 2.0}" rpy="0 0 0"/>
+        <origin xyz="0 0 ${lidar_collision_z}" rpy="0 0 0"/>
         <geometry>
-          <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+          <box size="${lidar_base_size} ${lidar_base_size}
+                     ${lidar_height}"/>
         </geometry>
       </collision>
-      <xacro:cylinder_inertial mass="${lidar_mass}"
-                               radius="${lidar_radius}"
-                               length="${lidar_height}">
-        <origin xyz="0 0 ${-lidar_height / 2.0}" rpy="0 0 0"/>
-      </xacro:cylinder_inertial>
+      <xacro:box_inertial mass="${lidar_mass}"
+                          x="${lidar_base_size}" y="${lidar_base_size}"
+                          z="${lidar_height}">
+        <origin xyz="0 0 ${lidar_collision_z}" rpy="0 0 0"/>
+      </xacro:box_inertial>
     </link>
 
     <joint name="${prefix}base_link_to_lidar_link_joint" type="fixed">

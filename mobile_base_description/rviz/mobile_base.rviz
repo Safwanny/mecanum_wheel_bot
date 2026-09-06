@@ -34,11 +34,11 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 0.55
+      Distance: 0.75
       Focal Point:
         X: 0
         Y: 0
-        Z: 0.06
+        Z: 0.05
       Name: Mobile Base View
       Near Clip Distance: 0.005
       Pitch: 0.45

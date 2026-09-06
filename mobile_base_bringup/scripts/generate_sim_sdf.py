@@ -33,6 +33,13 @@ WHEEL_URI_PREFIXES = (
     'model://mobile_base/meshes/wheels/',
     'model://mobile_base_description/meshes/wheels/',
 )
+MOTOR_URI_PREFIXES = (
+    'package://mobile_base_description/meshes/motors/',
+    'package://mobile_base/meshes/motors/',
+    'model://mobile_base/meshes/motors/',
+    'model://mobile_base_description/meshes/motors/',
+)
+MOTOR_FILES = {'tt_gearmotor.stl'}
 WHEEL_FILES = {
     'mecanum_wheel_FL.stl', 'mecanum_wheel_FR.stl',
     'mecanum_wheel_RL.stl', 'mecanum_wheel_RR.stl',
@@ -63,6 +70,15 @@ def _wheel_file_uris():
     if missing:
         raise RuntimeError('Missing installed wheel meshes: ' + ', '.join(missing))
     return {name: (wheels / name).resolve().as_uri() for name in WHEEL_FILES}
+
+
+def _motor_file_uris():
+    share = Path(get_package_share_directory('mobile_base_description'))
+    motors = share / 'meshes' / 'motors'
+    missing = sorted(name for name in MOTOR_FILES if not (motors / name).is_file())
+    if missing:
+        raise RuntimeError('Missing installed motor meshes: ' + ', '.join(missing))
+    return {name: (motors / name).resolve().as_uri() for name in MOTOR_FILES}
 
 
 def _nonnegative_finite(value, field):
@@ -212,6 +228,27 @@ def _rewrite_wheel_mesh_uris(root):
             'Generated SDF must reference each wheel visual mesh exactly once')
 
 
+def _rewrite_motor_mesh_uris(root):
+    """Resolve the shared motor mesh to an absolute path for Gazebo."""
+    # All four motor links reuse one mesh, so unlike the wheels this counts
+    # references rather than requiring each file exactly once.
+    motor_file_uris = _motor_file_uris()
+    referenced = 0
+    for uri in root.findall('.//uri'):
+        for prefix in MOTOR_URI_PREFIXES:
+            if uri.text and uri.text.startswith(prefix):
+                mesh_name = uri.text[len(prefix):]
+                if mesh_name not in motor_file_uris:
+                    raise RuntimeError('Unresolved motor visual URI: ' + uri.text)
+                uri.text = motor_file_uris[mesh_name]
+                referenced += 1
+                break
+    if referenced != 4:
+        raise RuntimeError(
+            'Generated SDF must reference the motor visual mesh once per '
+            f'motor; found {referenced}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--xacro', required=True)
@@ -232,6 +269,7 @@ def main():
 
     root = ET.fromstring(sdf)
     _rewrite_wheel_mesh_uris(root)
+    _rewrite_motor_mesh_uris(root)
     inject_wheel_surfaces(root)
     validate_mecanum_wheel_contact(root)
     ET.ElementTree(root).write(

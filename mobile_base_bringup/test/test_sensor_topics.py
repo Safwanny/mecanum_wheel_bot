@@ -13,7 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Launch Gazebo headlessly and verify the ROS sensor topic contract."""
+"""
+Launch Gazebo headlessly and verify the ROS sensor topic contract.
+
+Runs in my_world since sensor_test was retired. Nothing here asserts
+world geometry - the checks are on frame ids, message shape, finiteness
+and covariances. The one world-dependent requirement is that the LiDAR
+returns something finite, and the robot spawns in the hall with walls
+1.5 m away against a 4.0 m range, so that holds with margin.
+"""
 
 import math
 import time
@@ -40,7 +48,7 @@ def generate_test_description():
     simulation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(launch_file),
         launch_arguments={
-            'world': 'sensor_test',
+            'world': 'my_world',
             'gui': 'false',
             'rviz': 'false',
             'use_sim_time': 'true',

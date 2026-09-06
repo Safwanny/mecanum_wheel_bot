@@ -31,5 +31,48 @@
                           mesh="mecanum_wheel_RL.stl"
                           visual_xyz="-0.032786922 0.001235564 0.016969848"
                           visual_rpy="${-pi / 2.0} -0.49581568 0"/>
+
+    <!-- Motors share their wheel's joint origin, so the motor frame sits on
+         the output shaft it drives and the shaft runs down the wheel axis.
+
+         Each motor lies flat on the lower deck on one of its large gearbox
+         faces, with its shaft horizontal and pointing outboard into the wheel
+         hub, and its round can pointing inboard along the body. The mesh has
+         its shaft along the mesh Z axis, so every instance rolls +/-90 degrees
+         about X to lay that axis across the robot; front and rear differ by a
+         180 degree yaw so the can always points towards the middle of the
+         robot. Left and right are mirror images, which a rotation cannot
+         express, so the two sides rest on opposite faces. -->
+    <xacro:property name="motor_inboard_y"
+                    value="${wheel_width / 2.0 - motor_body_outer}"/>
+
+    <xacro:tt_gearmotor prefix="${prefix}" name="front_left"
+                        x="${wheelbase / 2.0}" y="${wheel_separation / 2.0}"
+                        z="${wheel_z}" parent="base_link"
+                        visual_xyz="${-motor_shaft_x} ${-motor_inboard_y}
+                                    ${-motor_shaft_offset}"
+                        visual_rpy="${pi / 2.0} 0 0"/>
+
+    <xacro:tt_gearmotor prefix="${prefix}" name="front_right"
+                        x="${wheelbase / 2.0}" y="${-wheel_separation / 2.0}"
+                        z="${wheel_z}" parent="base_link"
+                        visual_xyz="${-motor_shaft_x} ${motor_inboard_y}
+                                    ${motor_shaft_offset}"
+                        visual_rpy="${-pi / 2.0} 0 0"/>
+
+    <xacro:tt_gearmotor prefix="${prefix}" name="rear_right"
+                        x="${-wheelbase / 2.0}" y="${-wheel_separation / 2.0}"
+                        z="${wheel_z}" parent="base_link"
+                        visual_xyz="${motor_shaft_x} ${motor_inboard_y}
+                                    ${-motor_shaft_offset}"
+                        visual_rpy="${pi / 2.0} 0 ${pi}"/>
+
+    <xacro:tt_gearmotor prefix="${prefix}" name="rear_left"
+                        x="${-wheelbase / 2.0}" y="${wheel_separation / 2.0}"
+                        z="${wheel_z}" parent="base_link"
+                        visual_xyz="${motor_shaft_x} ${-motor_inboard_y}
+                                    ${motor_shaft_offset}"
+                        visual_rpy="${-pi / 2.0} 0 ${pi}"/>
+
   </xacro:macro>
 </robot>

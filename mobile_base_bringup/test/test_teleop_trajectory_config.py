@@ -47,7 +47,7 @@ def main():
     assert "'/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'" in launch
     assert "'/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU'" in launch
     assert "DeclareLaunchArgument(\n                'use_sim_time'" in launch
-    assert "default_value='empty'" in launch
+    assert "default_value='navigation_basic'" in launch
     assert 'requested_path.is_absolute()' in launch
     assert "get_package_share_directory('mobile_base_gazebo')" in launch
     assert "package='mobile_base_tools'" in launch
@@ -61,38 +61,19 @@ def main():
     assert "DeclareLaunchArgument('namespace'" not in launch
     assert 'PushRosNamespace' not in launch
 
-    evaluation_launch = read(
-        bringup / 'launch' / 'odometry_evaluation.launch.py'
-    )
-    assert "package='mobile_base_evaluation'" in evaluation_launch
-    assert "executable='ground_truth_selector'" in evaluation_launch
-    assert 'geometry_msgs/msg/PoseArray' not in evaluation_launch
-    assert 'ros_gz_interfaces/srv/SetEntityPose' in evaluation_launch
-    assert "executable='odometry_test_runner'" in evaluation_launch
-    assert "default_value='empty'" in evaluation_launch
-    assert "default_value='false'" in evaluation_launch
-    assert "'physics_max_step_size'" in evaluation_launch
-    assert "'/tf'" not in evaluation_launch
-    assert "'center_projection_sum', default_value='0.12521'" \
-        in evaluation_launch
-
     package = ET.parse(bringup / 'package.xml').getroot()
     exec_depends = [elem.text for elem in package.findall('exec_depend')]
     assert 'teleop_twist_keyboard' in exec_depends
     assert 'mobile_base_tools' in exec_depends
-    assert 'mobile_base_evaluation' in exec_depends
     assert 'mobile_base_localization' in exec_depends
     assert 'sensor_msgs' in exec_depends
 
     installed_worlds = {
         path.stem for path in (gazebo / 'worlds').glob('*.sdf')
     }
-    assert {
-        'empty',
-        'sensor_test',
-        'navigation_basic',
-        'navigation_narrow',
-    } <= installed_worlds
+    # The world set was reduced to these two. navigation_basic carries the
+    # maintained Phase 2 map; my_world is the apartment layout.
+    assert installed_worlds == {'navigation_basic', 'my_world'}
 
     rviz = read(description / 'rviz' / 'mobile_base_sim.rviz')
     assert 'Fixed Frame: odom' in rviz

@@ -71,3 +71,33 @@ global_costmap:
         inflation_radius: 0.30
         # Shapes the gradient only; it does not resize the cleared region.
         cost_scaling_factor: 3.0
+
+# ---------------------------------------------------------------------------
+# GridBasedLattice - alternate planner profile, opt-in, NOT loaded by default.
+#
+# Kept commented here as a signpost rather than as live configuration. The
+# real block lives in config/planner_lattice.yaml, which planning.launch.py
+# loads as an OVERLAY on top of this file when motion_profile:=primitive, so
+# the global_costmap block above is never duplicated and the two copies can
+# never drift apart. Uncommenting this would not enable anything; it would
+# just be a second stale copy.
+#
+#   ros2 launch mobile_base_navigation planning.launch.py \
+#     motion_profile:=primitive map:=...
+#
+# What it changes: SmacPlanner2D's grid A* is replaced by an eight-heading
+# motion lattice whose every edge is one primitive this robot can execute -
+# a straight or 45-degree diagonal run, or a heading change. Paths become
+# polylines with sharp corners instead of smooth grid routes.
+#
+#   planner_server:
+#     ros__parameters:
+#       GridBased:
+#         plugin: mobile_base_navigation::LatticePlanner
+#         step_size_m: 0.05
+#         turning_cost_weight: 0.35
+#         heading_snap_hysteresis_deg: 5.0
+#
+# The id stays GridBased on purpose: the behaviour tree's PlannerSelector
+# defaults to that name, so swapping the type under a stable id is what makes
+# the alternate profile a drop-in.

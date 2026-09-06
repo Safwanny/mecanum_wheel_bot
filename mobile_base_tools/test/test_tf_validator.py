@@ -23,6 +23,14 @@ def valid_transforms():
     }
     static = {
         ('base_footprint', 'base_link'): TransformStatistics(sample_count=1),
+        ('base_link', 'front_left_motor_link'):
+            TransformStatistics(sample_count=1),
+        ('base_link', 'front_right_motor_link'):
+            TransformStatistics(sample_count=1),
+        ('base_link', 'rear_right_motor_link'):
+            TransformStatistics(sample_count=1),
+        ('base_link', 'rear_left_motor_link'):
+            TransformStatistics(sample_count=1),
         ('base_link', 'imu_link'): TransformStatistics(sample_count=1),
         ('base_link', 'lidar_link'): TransformStatistics(sample_count=1),
         ('base_link', 'camera_link'): TransformStatistics(sample_count=1),

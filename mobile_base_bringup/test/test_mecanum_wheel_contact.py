@@ -135,7 +135,7 @@ def test_launch_files_have_no_contact_model_api(generator, package_dir):
     )
     for name in (
             'simulation.launch.py', 'mapping.launch.py',
-            'localization.launch.py', 'odometry_evaluation.launch.py'):
+            'localization.launch.py', 'camera_view.launch.py'):
         text = (launch_dir / name).read_text(encoding='utf-8')
         for token in obsolete:
             assert token not in text, f'{token} remains in {name}'

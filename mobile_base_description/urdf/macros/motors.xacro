@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- TT gearmotor driving one wheel.
+
+       The link frame is the output shaft axis, so a motor link sits exactly on
+       its wheel joint: base_link -> *_motor_link and base_link -> *_wheel_link
+       are the same translation. That keeps the wheel joints parented straight
+       to base_link, so the drive chain and the validated kinematics are
+       untouched, while each motor still gets its own inspectable frame.
+
+       The mesh origin is a bounding-box corner with the long axis along its
+       own +X, so visual_xyz/visual_rpy seat the shaft on the link origin and
+       point the motor can inboard - the same per-instance pose convention the
+       wheel macro uses. The motors carry negligible mass: the Gazebo URDF
+       reduction lumps fixed-joint children into base_link, and chassis_mass is
+       already the whole-body mass. -->
+  <xacro:macro name="tt_gearmotor"
+               params="prefix name parent x y z visual_xyz visual_rpy">
+    <link name="${prefix}${name}_motor_link">
+      <visual>
+        <origin xyz="${visual_xyz}" rpy="${visual_rpy}"/>
+        <geometry>
+          <mesh
+            filename="package://mobile_base_description/meshes/motors/tt_gearmotor.stl"
+            scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="motor_yellow"/>
+      </visual>
+
+      <!-- No collision: the chassis bounding box already covers the motors,
+           and an extra collision would break the one-surface-per-wheel
+           contract the Gazebo SDF generator relies on. -->
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="${motor_mass}"/>
+        <inertia ixx="1.0e-9" ixy="0.0" ixz="0.0"
+                 iyy="1.0e-9" iyz="0.0" izz="1.0e-9"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}${name}_motor_joint" type="fixed">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${name}_motor_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

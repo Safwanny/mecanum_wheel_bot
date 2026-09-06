@@ -1,0 +1,317 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="my_world">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><ambient>0.65 0.65 0.65 1</ambient><diffuse>0.65 0.65 0.65 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!--
+      Six rooms inside a SEALED 10 x 10 m shell. No door, window or gap of
+      any kind in the 10 x 10 boundary.
+
+       y=+5    +======+==============+=====+=====+
+              |      |              |     |BATH |
+              | BED  | KITCHEN (L)  |     | 2x2 |
+       y=+3   |  2   |              +=====+[0.6]+
+              |3x4.25|              |   UTILITY  |
+              |      +====[0.9]=====+ 3.25 x 2.25|
+       y=+0.75 +[0.7]+=====[1.2]====+============+
+              |            HALL   10 x 1.5       |
+       y=-0.75 +======[1.0]======================+
+              |                                  |
+       y=-2.5 |     LIVING ROOM (L)    +==[0.8]==+
+              |                        | MASTER  |
+       y=-5   +========================+3 x 2.5==+
+             x=-5   x=-2      x=+1.75 x=+2/+3  x=+5
+
+      Halved from the 20 x 20 version. Doorways were NOT halved: 0.70 / 2 is
+      0.35 m against a padded footprint diameter of 0.308 m, which leaves 0.02 m
+      a side and is impassable. They are rescaled to a navigable spread instead,
+      still all different:
+        kitchen 1.20, living 1.00, kitchen-to-utility 0.90, master 0.80,
+        bedroom 2 0.70, bathroom 0.60 m.
+
+      L-shaped rooms, each wrapping a smaller room in a corner:
+        KITCHEN  arms x -2..1.75 by y 0.75..3, and x -2..3 by y 3..5
+        LIVING   arms x -5..5 by y -2.5..-0.75, and x -5..2 by y -5..-2.5
+
+      The master still opens off the LIVING ROOM rather than the hall.
+    -->
+
+    <model name="shell_north">
+      <static>true</static><pose>0 5.075 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>10.3 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.3 0.15 1</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="shell_south">
+      <static>true</static><pose>0 -5.075 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>10.3 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.3 0.15 1</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="shell_east">
+      <static>true</static><pose>5.075 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 10.3 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 10.3 1</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="shell_west">
+      <static>true</static><pose>-5.075 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 10.3 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 10.3 1</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_hall_north_1">
+      <static>true</static><pose>-4.425 0.75 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.15 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.15 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_hall_north_2">
+      <static>true</static><pose>-1.575 0.75 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>3.15 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>3.15 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_hall_north_3">
+      <static>true</static><pose>3.1 0.75 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>3.8 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>3.8 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_hall_south_1">
+      <static>true</static><pose>-4 -0.75 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>2 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>2 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_hall_south_2">
+      <static>true</static><pose>1.5 -0.75 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>7 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>7 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_bed_kitchen_1">
+      <static>true</static><pose>-2 2.8375 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 4.325 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 4.325 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_bath_south_1">
+      <static>true</static><pose>3.3125 3 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.775 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.775 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_bath_south_2">
+      <static>true</static><pose>4.65 3 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.7 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.7 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_bath_west_1">
+      <static>true</static><pose>3 3.9625 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 2.075 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 2.075 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_master_north_1">
+      <static>true</static><pose>2.5125 -2.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.175 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.175 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_master_north_2">
+      <static>true</static><pose>4.45 -2.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.1 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.1 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_master_west_1">
+      <static>true</static><pose>2 -3.7125 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 2.575 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 2.575 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_utility_1">
+      <static>true</static><pose>1.75 0.9875 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 0.625 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 0.625 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_utility_2">
+      <static>true</static><pose>1.75 2.6375 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 0.875 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 0.875 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_utility_return_1">
+      <static>true</static><pose>2.375 3 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.4 0.15 1</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.4 0.15 1</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

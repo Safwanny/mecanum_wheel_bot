@@ -1,0 +1,107 @@
+# Alternate local controller: one motion primitive at a time.
+#
+# An OVERLAY on controller.yaml, loaded second, for the same reason
+# planner_lattice.yaml is an overlay: the goal checker, progress checker,
+# odom_topic and the min_*_velocity_threshold corrections stay in one file.
+# Selected with motion_profile:=primitive.
+#
+# The plugin id stays "FollowPath" so the behaviour tree's ControllerSelector
+# default keeps resolving. The profile name FollowPathPrimitive is what the
+# docs call it.
+controller_server:
+  ros__parameters:
+    # The one thing outside the FollowPath block this profile has to change.
+    #
+    # controller.yaml sets 0.50 rad (28.6 deg) because MPPI has no dedicated
+    # final-rotation phase: a tight tolerance there makes it re-approach the
+    # goal forever, repositioning to fix a heading. This controller has
+    # FINAL_ORIENT, which rotates in place without touching position, so the
+    # failure mode that justified 0.50 does not exist here.
+    #
+    # Leaving it at 0.50 was measured to cap the achievable heading accuracy:
+    # controller_server stops calling the controller the moment the checker is
+    # satisfied, so FINAL_ORIENT was cut off mid-rotation and final yaw error
+    # sat at 21.7, 23.1 and 24.4 degrees across three goals - all just inside
+    # 28.6. The checker, not the controller, was the limit.
+    general_goal_checker:
+      yaw_goal_tolerance: 0.10
+
+    FollowPath:
+      plugin: mobile_base_navigation::PrimitiveController
+
+      # DOUBLED FROM THE VALIDATED ENVELOPE ON REQUEST. Every accuracy
+      # measurement in this repo was taken at 0.10 m/s and 0.30 rad/s; these
+      # are 2x that and therefore outside anything characterised. The
+      # smoother's [0.5, 0.5, 2.0] ceiling still bounds them, so nothing can
+      # run away, but expect larger overshoot at segment ends and a longer
+      # stopping distance than the 0.12 m the e-stop was measured at.
+      max_linear_vel: 0.20
+      max_angular_vel: 0.60
+
+      # Floors, not deadbands, and applied only while the error is still
+      # outside tolerance. Below these a command is too small to overcome
+      # stiction on a real base and a segment ends in a crawl that never
+      # finishes. They are unrelated to controller_server's
+      # min_*_velocity_threshold, which filters MEASURED velocity, not
+      # commanded velocity - those stay at 0.001 in controller.yaml and must
+      # not be raised towards Nav2's diff-drive default of 0.5.
+      min_linear_vel: 0.04
+      min_angular_vel: 0.10
+
+      # Proportional dominates by design. The along-track error is a
+      # monotonically shrinking distance with no steady-state offset to
+      # integrate away, and the derivative term differentiates a pose estimate,
+      # which is mostly noise at 20 Hz. ki and kd are exposed for tuning and
+      # left at zero. Integrators reset on every phase transition regardless:
+      # an align integral carried into the first translation tick is precisely
+      # the blended command this controller exists to make impossible.
+      linear_kp: 1.2
+      linear_ki: 0.0
+      linear_kd: 0.0
+      angular_kp: 1.5
+      angular_ki: 0.0
+      angular_kd: 0.0
+
+      # A segment is finished when the remaining ALONG-TRACK distance drops
+      # under this. Along-track, not straight-line: straight-line distance
+      # never goes negative, so an overshoot would drive the robot back and
+      # forth across the waypoint forever. Sized above one control tick of
+      # travel, now 0.20 / 20 = 0.010 m at the doubled speed.
+      segment_tolerance_m: 0.03
+
+      # Body yaw accuracy required before ALIGN hands over to EXECUTE.
+      yaw_tolerance_rad: 0.05
+
+      # Yaw drift that sends EXECUTE back to ALIGN mid-path. Must exceed
+      # yaw_tolerance_rad: equal values chatter between the two phases every
+      # time the estimate wobbles across the threshold, and the robot
+      # alternates between rotating and translating without progressing.
+      realign_yaw_rad: 0.15
+
+      # Must stay under the overlaid goal-checker tolerance of 0.10 above, or
+      # the checker declares success while FINAL_ORIENT is still turning - the
+      # exact cap that limited heading accuracy to ~23 degrees.
+      goal_yaw_tolerance_rad: 0.05
+
+      integral_limit: 0.5
+      transform_tolerance: 0.30
+
+      # Orient, then move. ALIGN drives the body yaw onto the segment's own
+      # direction, so every EXECUTE_SEGMENT is a pure FORWARD along the way
+      # the robot is pointing and its heading always shows where it intends
+      # to go. The lattice's diagonals are still used - the robot turns to
+      # face along them and drives forward.
+      #
+      # Set false to get the crab-walking behaviour instead: ALIGN snaps to
+      # the nearest of the eight headings (at most 22.5 degrees) and each
+      # segment is then executed as whichever body-frame primitive it happens
+      # to be, so the base strafes and moves diagonally without turning.
+      # Fewer rotations, but the heading tells you nothing about intent.
+      align_to_segment: true
+
+      # Waypoints closer together than this are dropped when a plan loads.
+      # A replan issued while the robot is already sitting on the goal returns
+      # a path a few millimetres long whose direction is rounding noise; the
+      # robot would turn to face it, and bt_navigator would hand it another
+      # one a second later. That was the random spinning near a goal.
+      min_segment_length_m: 0.05

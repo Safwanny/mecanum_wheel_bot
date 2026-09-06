@@ -16,7 +16,6 @@ through a single arbiter behind a latching emergency stop.
 | `mobile_base_bringup` | Top-level simulation, mapping, localization, and evaluation launches; generated SDF |
 | `mobile_base_localization` | EKF, SLAM Toolbox, map server, and AMCL |
 | `mobile_base_navigation` | Costmaps, planner, controller, behavior tree, command arbitration and e-stop |
-| `mobile_base_evaluation` | Evaluation-only Gazebo ground-truth selection |
 | `mobile_base_tools` | Motion profiles, trajectory recording, diagnostics, reports, and process isolation |
 
 ## Runtime data flow
@@ -113,6 +112,56 @@ whenever `mu`, `mu2`, `slip1`, wheel cylinder geometry, or wheel positions
 change. It is also simulation-only: on hardware it would inject an 11.8%
 rotational error, so a physical base starts from the geometric `0.142 m` and
 derives its own value.
+
+## Body geometry
+
+The body is a dual-deck plate frame, not a solid block. `base_link` carries one
+visual per printed part - two 10 mm deck plates and four corner standoffs -
+plus a single box collision spanning the whole body. Splitting the visuals
+while keeping one collision is deliberate: the planner must never see the open
+electronics bay between the decks as passable geometry.
+
+The vertical stack hangs off the wheel radius. The motors stand on the lower
+deck and drive the wheels directly, so the deck's top face is pinned exactly
+one motor shaft offset below the wheel axle:
+
+| Surface | Height above ground |
+| --- | --- |
+| Lower deck underside (ground clearance) | 0.0095 m |
+| Lower deck top, motors stand here | 0.0195 m |
+| Motor tops | 0.0419 m |
+| Upper deck underside, IMU hangs here | 0.0595 m |
+| Upper deck top, LiDAR stands here | 0.0695 m |
+| LiDAR scan plane | 0.0915 m |
+| Overall height | 0.0995 m |
+
+The camera is mounted on the front face of the upper deck, centred on the
+plate's thickness. The LiDAR is a square dark base carrying a cylindrical
+rotating head, and its collision is one box bounding both.
+
+Ground clearance is therefore not a free parameter: it is
+`wheel_radius - motor_shaft_offset - lower_deck_thickness`, and a thicker lower
+deck or a taller motor eats directly into it.
+
+Each motor lies flat on a large gearbox face with its output shaft horizontal,
+running outboard along the wheel axis and into the wheel hub. The mesh carries
+its shaft along the mesh Z axis, so every instance rolls 90 degrees about X to
+lay that axis across the robot, and front and rear differ by a 180 degree yaw
+so the round motor can always points inboard. Left and right are mirror images,
+which no rotation can express, so the two sides rest on opposite faces.
+
+`base_link` itself is pinned to 0.040372215 m, the height the motion model was
+identified at. The body grew upward around that frame rather than moving it, so
+every existing TF offset, controller gain and test expectation still holds.
+
+Each motor is its own link, parented to `base_link` at the same origin as the
+wheel it drives - the link frame is the output shaft. The wheel joints stay
+parented directly to `base_link`, so the drive chain and kinematics are
+untouched. Motors carry negligible inertia: the Gazebo URDF reduction lumps
+fixed-joint children into the parent, and `chassis_mass` is already the
+whole-body mass of the validated model. They also carry no collision, both
+because the body box already covers them and because an extra collision would
+break the one-surface-per-wheel contract the SDF generator enforces.
 
 ## Canonical mecanum contact
 
@@ -216,14 +265,6 @@ corrections.
 - `mapping.launch.py` includes simulation with EKF and adds SLAM Toolbox.
 - `localization.launch.py` includes simulation with EKF and adds map server and
   AMCL.
-- `odometry_evaluation.launch.py` includes canonical simulation and adds
-  ground-truth/reset interfaces plus the evaluation runner.
-- `planning.launch.py` includes `localization.launch.py` and adds the costmaps,
-  planner, and goal bridge. It forces `velocity_smoother:=false`, because the
-  smoother is the one stage that remaps onto the controller reference topic.
-- `planning_harness.launch.py` runs the same costmaps and planner headlessly
-  against static transforms, with no Gazebo, for fast tuning and future CI.
-
 No launch exposes a mecanum contact-model choice. The normal entry points are:
 
 ```bash
@@ -258,17 +299,49 @@ the wrong thing.
 | --- | --- | --- |
 | Wheel odometry | `mecanum_drive_controller` inverse kinematics | ros2_control stock. Uses a calibrated rotational projection of `0.12521 m`, not the geometric `0.142 m` — see "Canonical mecanum contact" |
 | Sensor fusion | `robot_localization` EKF, planar mode | Fuses wheel odometry with the IMU. Lateral mecanum velocity is given deliberately lower confidence than forward, because it is the least accurate axis |
-| Mapping | `slam_toolbox`, synchronous, Ceres solver | Pose-graph SLAM with loop closure, tuned conservatively — see below |
+| Mapping | `slam_toolbox`, synchronous, Ceres solver | Pose-graph SLAM with loop closure. Wide search, strict acceptance — see below |
 | Localization | `nav2_amcl` with `OmniMotionModel` | Particle filter. The **omni** motion model is required: the differential model cannot represent lateral motion, so a strafing mecanum robot would be modelled as impossible |
 
-**SLAM loop-closure tuning is deliberately strict.** The 4.0 m LiDAR cannot see
-across this 10 x 8 m room, so its centre is a feature-poor dead zone where the
-matcher falls back on odometry, and the four long walls look alike. The stock
-thresholds admitted false closures that rotated the entire pose graph. The fine
-and coarse response floors are raised, the matching chain lengthened, and
-closures that disagree with odometry penalised. The trade is accepted knowingly:
-some genuine closures are now rejected too, so expect slightly more residual
-drift instead of a wrong snap. A drifted map is usable; a rotated one is not.
+**SLAM tuning trades a wide loop search against strict acceptance.** The 4.0 m
+LiDAR cannot see across either world, so room centres are feature-poor dead
+zones where the matcher falls back on odometry, and long parallel walls look
+alike.
+
+Two failures have to be balanced against each other:
+
+- *Search too narrow and loop closure never fires.* `loop_search_maximum_distance`
+  is the radius around the current pose in which candidate closures are looked
+  for. The stock 3.0 m was sized for `navigation_basic`; when `my_world` was
+  20 x 20 m, a circuit accumulated drift far beyond that radius before
+  returning, the search never reached the earlier pose, the graph never
+  snapped, and the map translated and superimposed on itself. It is now
+  **6.0 m** against a 10 x 10 m world — over half the room, but deliberately
+  not all of it.
+- *Search too wide and a false closure folds the map onto itself.* An apartment
+  of similar rectangular rooms is exactly the repetitive geometry that provokes
+  one, and a false closure is unrecoverable where drift is merely untidy. A
+  search radius approaching the map size makes every similar room a candidate.
+  The coarse and fine response floors are held at 0.55 / 0.70 and the minimum
+  chain at 20.
+
+The trade is accepted knowingly: some genuine closures are still rejected, so
+expect residual drift rather than a wrong snap. A drifted map is usable; a
+folded one is not.
+
+**Geometry sets the ceiling, not tuning.** Sampling a world on a grid and
+ray-casting the 4.0 m LiDAR at each free pose gives the fraction of the floor
+that sees only *one* wall axis. Two parallel walls fix lateral position and
+heading but leave position *along* the corridor unobservable, so the matcher
+accepts whatever odometry says and drift there is uncorrected by construction.
+
+| `my_world` | Floor seeing only one wall axis |
+| --- | --- |
+| at 20 x 20 m | **21.6%** — the 20 m hall was unmappable in its long axis |
+| at 10 x 10 m | **0%** |
+
+Shrinking the world to 10 x 10 m removed the problem outright: no pose in the
+apartment is now underconstrained. No amount of SLAM tuning fixes an
+unobservable direction — only geometry does.
 
 ### Planning
 
@@ -354,7 +427,271 @@ enabled on measurement rather than assumption: a full rotation in place changed
 the closest observed obstacle distance by 0.01 m, because this robot's footprint
 is circular and rotating sweeps nothing beyond the radius it already occupies.
 
+## Motion profiles
+
+Two planner/controller pairs ship, selected by one launch argument.
+
+```bash
+# primitive (default) - turn to face each leg, then drive it
+ros2 launch mobile_base_navigation planning.launch.py map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+
+# holonomic - MPPI, blended motion, the profile every measurement was taken against
+ros2 launch mobile_base_navigation planning.launch.py motion_profile:=holonomic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+```
+
+Everything earlier in this document describes the **holonomic** pair, which is
+still the only one with measured accuracy behind it. The **primitive** pair is
+now the default because its motion is legible: the robot faces where it is
+about to go, so its heading tells you its intent.
+
+`motion_profile` selects a pair, not a stack. Both profiles use the same
+costmaps, the same goal and progress checkers, the same `odom_topic`, the same
+behaviour tree and the same command chain below `controller_server`:
+
+```text
+motion_profile:=holonomic                  motion_profile:=primitive (default)
+        |                                          |
+        v                                          v
+  planner.yaml                              planner.yaml
+                                          + planner_lattice.yaml   (overlay)
+        |                                          |
+        v                                          v
+  GridBased =                               GridBased =
+  nav2_smac_planner::SmacPlanner2D          mobile_base_navigation::LatticePlanner
+        |                                          |
+  controller.yaml                           controller.yaml
+                                          + controller_primitive.yaml (overlay)
+        |                                          |
+        v                                          v
+  FollowPath =                              FollowPath =
+  nav2_mppi_controller::MPPIController      mobile_base_navigation::PrimitiveController
+        |                                          |
+        +--------------------+---------------------+
+                             |
+                             v
+                       /cmd_vel_nav  --> velocity_smoother --> collision_monitor
+                                     --> twist_mux --> /mobile_base_controller/reference
+```
+
+The overlays are **parameter files loaded second**, naming only the leaves that
+change; later files win leaf by leaf. That is why the costmap block, the goal
+checker and the `min_*_velocity_threshold` corrections exist in exactly one
+place and cannot drift between profiles. It is also why the plugin **ids** stay
+`GridBased` and `FollowPath` even though the profile is named after them: the
+behaviour tree runs a `PlannerSelector` defaulting to `GridBased` and a
+`ControllerSelector` defaulting to `FollowPath`, so swapping the plugin *type*
+under a stable id is what makes the alternate profile a drop-in.
+
+### `mobile_base_navigation::LatticePlanner`
+
+A* over `(x, y, heading)`, where heading is one of eight directions 45 degrees
+apart. Two edge types:
+
+- **TRANSLATE** — one step along the current heading. A diagonal is its own
+  edge type with length `step * sqrt(2)`, not a forward edge composed with a
+  strafe, because the robot executes it as a single primitive and the search
+  has to cost it as one.
+- **ROTATE** — plus or minus one heading, cost `turning_cost_weight` times the
+  angular distance. Restricting rotation to adjacent headings keeps the
+  branching factor at three; because the cost is linear in angle, composing two
+  45-degree edges costs exactly what one 90-degree edge would.
+
+`step_size_m` is quantised to a whole number of costmap cells. This is not
+tidiness: a diagonal edge of an arbitrary length lands between cell centres and
+the lattice walks off its own grid after a few expansions.
+
+Edge validity is the robot's disc swept along the segment, computed as a
+**dilation of the lethal set done once per search** rather than a disc test per
+candidate edge — the naive form is tens of millions of lookups on a room-sized
+map. Only `LETHAL_OBSTACLE` is dilated, never `INSCRIBED_INFLATED_OBSTACLE`:
+the inflation layer has already marked the inscribed band using the same
+`robot_radius`, so dilating that too would apply the footprint twice and close
+gaps the robot fits through. `allow_unknown: false` is preserved, so unknown
+space is as impassable as a wall.
+
+The radius comes from `getCircumscribedRadius()` rather than being restated.
+Worth knowing, because it does not read back as the 0.14 in `planner.yaml`:
+Nav2 builds a 16-gon from `robot_radius` then pads it by `footprint_padding`
+(0.01) per coordinate, so a 45-degree vertex moves from `(0.099, 0.099)` to
+`(0.109, 0.109)` and the logged radius is **0.154 m**. That is the padded
+footprint the rest of Nav2 collision-checks with, so matching it keeps the
+planner and the costmap agreeing.
+
+Consecutive same-heading edges are merged before the path is returned. A 3 m
+straight run at a 0.05 m step is 60 edges and comes back as **two poses**.
+Every pose orientation carries the **travel direction** of the segment leaving
+it — not a commanded body yaw — except the last, which carries the requested
+goal yaw for the goal checker to compare against.
+
+A measured example, planning from the map origin to `(2.5, 3.4)` in
+`navigation_basic`:
+
+| # | Position | Segment leaving it |
+| --- | --- | --- |
+| 0 | (0.005, −0.004) | 45.000 deg, 1.344 m |
+| 1 | (0.955, 0.946) | 90.000 deg, 2.100 m |
+| 2 | (0.955, 3.046) | 45.000 deg, 0.495 m |
+| 3 | (1.305, 3.396) | 0.000 deg, 1.150 m |
+| 4 | (2.455, 3.396) | — |
+
+Four segments, every one an exact multiple of 45 degrees, threading the 0.925 m
+gap at the interior wall's north end.
+
+### `mobile_base_navigation::PrimitiveController`
+
+A state machine, not an optimiser:
+
+```text
+ALIGN_TO_SEGMENT_HEADING --> EXECUTE_SEGMENT --> (next segment) ... --> FINAL_ORIENT
+         ^                        |
+         +---- yaw drift ---------+
+```
+
+`ALIGN` and `FINAL_ORIENT` command angular velocity only. `EXECUTE_SEGMENT`
+commands linear velocity only, always along one of the eight **body-frame**
+directions, so a diagonal has `|vx| == |vy|` exactly and nothing in between is
+reachable.
+
+`align_to_segment` (default **true**) decides what `ALIGN` aims at, and it is
+the single most visible setting in the profile:
+
+- **`true` — orient, then move.** `ALIGN` drives the body yaw onto the
+  segment's own direction, so every `EXECUTE_SEGMENT` is a pure `FORWARD`
+  along the way the robot is pointing. The lattice's diagonals are still used;
+  the robot turns to face along them and drives forward. This is the default
+  because the heading always shows intent.
+- **`false` — crab.** `ALIGN` snaps to the *nearest* of the eight headings, at
+  most 22.5 degrees, once. Because the plan's segment directions are themselves
+  45-degree-snapped, every segment is then exactly a body-frame primitive and
+  the base strafes or moves diagonally **without turning at all**. Far fewer
+  rotations, and the reason a holonomic base exists — but the robot crabs
+  sideways and its heading tells you nothing.
+
+Regulation is a PID on heading error and a separate PID on **along-track**
+distance, with both integrators and both derivative histories reset on every
+phase transition. Two traps are worth naming:
+
+- Along-track distance, not straight-line distance to the waypoint.
+  Straight-line distance never goes negative, so a robot that overshoots would
+  be driven back and forth across the waypoint forever. The projection goes
+  negative and ends the segment.
+- An integrator carried across a phase change is winding up against an error it
+  was never regulating. The align integral would dump itself into the first
+  translation tick — precisely the blended command this profile exists to make
+  impossible.
+
+`realign_yaw_rad` (0.15) is deliberately wider than `yaw_tolerance_rad` (0.05).
+Equal values chatter: `EXECUTE` leaves the moment the estimate crosses the
+line, `ALIGN` hands straight back, and the robot alternates between rotating
+and translating without progressing.
+
+The plan is planned in `map` and executed against a pose in the local costmap's
+`odom` frame, so it is re-transformed **every tick** — `map -> odom` moves
+whenever AMCL corrects. Only the geometry is refreshed; the phase and segment
+index persist, or the machine would restart 20 times a second and never leave
+the first segment. The body-frame direction is snapped afterwards, which
+absorbs up to 22.5 degrees of `map -> odom` rotation before a segment could be
+misclassified.
+
+Default limits are **0.20 m/s and 0.60 rad/s**, doubled from the validated
+0.10 / 0.30 by request. Both profiles were doubled; MPPI now runs 0.30 / 0.30 /
+1.20. Nothing about that is characterised, and the measured stop distances
+recorded earlier in this document were taken at 0.12 m/s and no longer describe
+the current configuration. The velocity smoother's `[0.5, 0.5, 2.0]` ceiling is
+the only remaining bound, and the static tests assert both controllers stay
+under it rather than asserting a number.
+
+### The degenerate-replan bug, and why `min_segment_length_m` exists
+
+`bt_navigator` replans at 1 Hz. A replan issued while the robot is already
+sitting on its goal returns a path a few millimetres long, whose direction is
+rounding noise rather than intent. Under `align_to_segment`, the robot turned
+to face that noise, settled, and was handed a fresh one a second later — which
+looked exactly like random spinning at the moment it should have been settling
+the goal heading. `min_segment_length_m` (0.05) drops sub-threshold waypoints
+when a plan loads, so such a plan has **no segments at all** and the machine
+goes straight to `FINAL_ORIENT` instead of fighting it.
+
+### What is verified, and what is not
+
+Measured in simulation across three goals with a commanded final heading,
+sampling `/cmd_vel_nav`, at the doubled speeds and with orient-then-move:
+
+| | Result |
+| --- | --- |
+| Goals reached | 3 / 3 |
+| Blended commands | **0** |
+| Final position error | 0.024 - 0.096 m |
+| Final heading error | **4.9 / 5.3 / 4.8 deg** |
+| Peak commanded speed | 0.200 m/s |
+
+Heading error was **21.7 / 23.1 / 24.4 deg** before one fix, and that spread is
+the signature of a tolerance cap rather than a control problem: all three sit
+just inside 28.6 deg, which is the `yaw_goal_tolerance: 0.50` inherited from
+the MPPI config. `controller_server` stops calling a controller the moment its
+goal checker is satisfied, so `FINAL_ORIENT` was being cut off mid-rotation
+every time. The checker, not the controller, was the limit. The overlay
+tightens it to 0.10 rad for this profile only; `controller.yaml` keeps 0.50 for
+MPPI, which has no final-rotation phase and re-approaches forever if the
+tolerance is tight.
+
+Position error sits well inside `xy_goal_tolerance` here, because orienting
+before moving means the robot arrives along the segment rather than being
+carried past it by a blended approach.
+
+What is **not** established: this profile has no accuracy campaign behind it,
+no stopping-distance measurement of its own, and no hardware exposure. It is
+the default because its motion is legible, not because it is better
+characterised - `holonomic` remains the profile every other number in this
+document was measured against, and the doubled speeds put both profiles outside
+what was characterised at all. One further caveat, since it is easy to
+misread a wheel-side trace: the velocity smoother still ramps *across* a phase
+transition, so a twist sampled at `/mobile_base_controller/reference` during a
+switch can briefly carry both terms even though the controller never commanded
+both. The invariant this profile guarantees is on the controller's own output.
+
+## Deferred navigation startup
+
+The navigation lifecycle manager runs with `autostart: false`, and a small
+`nav_autostart` node calls `STARTUP` once `/amcl_pose` arrives.
+
+The reason is that a costmap brought up before an initial pose is set is worse
+than one that is absent: it exists, it reports `active`, and it is built on
+whatever `map -> odom` happened to be there, so the map appears smeared against
+a pose nobody supplied. `/amcl_pose` is the right signal precisely because AMCL
+publishes it *only after receiving an initial pose* — it means "a human has
+said where the robot is", not merely "a node is running".
+
+```text
+launch --> planner_server, controller_server, ... all unconfigured
+                    |
+   RViz "2D Pose Estimate" --> AMCL --> /amcl_pose
+                    |
+              nav_autostart --> manage_nodes STARTUP
+                    |
+             costmaps, planner, controller --> active
+```
+
+Override with `autostart:=true` to bring everything up immediately, or
+`autostart_on_localization:=false` to do it by hand:
+
+```bash
+ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/ManageLifecycleNodes "{command: 0}"
+```
+
 ## Inspecting a running robot
+
+The camera has its own window and its own command, deliberately separate from
+every stack launch — it is a viewer, and starting a second simulation to look
+at the first one is not what anybody wants:
+
+```bash
+ros2 launch mobile_base_bringup camera_view.launch.py
+```
+
+It attaches to `/camera/image_raw` on whatever is already running.
+`use_sim_time` defaults to true because the images carry simulation timestamps
+and a viewer on wall time treats every one of them as far in the past.
 
 Everything below assumes a stack is already running. Start with stage 5 of the
 README quick start.
@@ -501,7 +838,9 @@ Bags default to MCAP on Jazzy.
 
 ## Validation boundaries
 
-Static description tests enforce four wheel links/joints, dimensions, poses,
+Static description tests enforce four wheel links/joints, four motor links on
+their wheel origins, the dual-deck stacking contract and its bounding
+collision, dimensions, poses,
 visual meshes, inertials, ros2_control interfaces, and absence of passive
 roller bodies. Generated-SDF tests enforce exactly four contact surfaces,
 canonical `mu`, `mu2`, slip and `fdir1`, handed direction signs, resolvable

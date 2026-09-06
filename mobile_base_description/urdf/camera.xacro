@@ -22,7 +22,8 @@
     <joint name="${prefix}base_link_to_camera_link_joint" type="fixed">
       <parent link="${prefix}base_link"/>
       <child link="${prefix}camera_link"/>
-      <origin xyz="${chassis_length / 2.0 + camera_depth / 2.0} 0 0" rpy="0 0 0"/>
+      <origin xyz="${chassis_length / 2.0 + camera_depth / 2.0} 0 ${camera_z}"
+              rpy="0 0 0"/>
     </joint>
 
     <link name="${prefix}camera_optical_frame"/>

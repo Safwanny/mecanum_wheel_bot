@@ -1,0 +1,24 @@
+<!--
+  Registered the same way nav2_smac_planner registers SmacPlanner2D: one
+  <library> naming the built shared object, one <class> per plugin giving the
+  fully qualified type and the nav2_core base it implements. Jazzy requires
+  the '::' separator in the type string; a '/' fails at load.
+-->
+<library path="mobile_base_navigation_plugins">
+  <class type="mobile_base_navigation::LatticePlanner"
+         base_class_type="nav2_core::GlobalPlanner">
+    <description>
+      Eight-heading lattice A*. Emits only straight and diagonal runs joined by
+      heading changes, so every segment is one motion primitive of this
+      holonomic base.
+    </description>
+  </class>
+  <class type="mobile_base_navigation::PrimitiveController"
+         base_class_type="nav2_core::Controller">
+    <description>
+      Drives one primitive at a time: rotate, forward/back, strafe, or a
+      45-degree diagonal with vx and vy locked to each other. Never blends
+      translation with rotation.
+    </description>
+  </class>
+</library>

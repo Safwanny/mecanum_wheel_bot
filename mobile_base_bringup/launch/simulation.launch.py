@@ -465,7 +465,7 @@ def generate_launch_description():
             *_gazebo_environment(),
             DeclareLaunchArgument(
                 'world',
-                default_value='empty',
+                default_value='navigation_basic',
                 description=(
                     'Installed world name, with or without .sdf, or an '
                     'absolute SDF path.'
@@ -525,7 +525,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument('x', default_value='0.0'),
             DeclareLaunchArgument('y', default_value='0.0'),
-            DeclareLaunchArgument('z', default_value='0.08'),
+            DeclareLaunchArgument('z', default_value='0.10'),
             DeclareLaunchArgument('yaw', default_value='0.0'),
             OpaqueFunction(
                 function=_resolve_world,

@@ -1,5 +1,33 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Shifts a ground-referenced z into base_link coordinates. -->
+  <xacro:property name="deck_z_offset" value="${-base_link_height}"/>
+
+  <!-- One deck plate, placed by the ground-referenced z of its bottom face. -->
+  <xacro:macro name="deck_plate" params="bottom_z thickness">
+    <visual>
+      <origin xyz="0 0 ${bottom_z + thickness / 2.0 + deck_z_offset}"
+              rpy="0 0 0"/>
+      <geometry>
+        <box size="${chassis_length} ${chassis_width} ${thickness}"/>
+      </geometry>
+      <material name="base_dark"/>
+    </visual>
+  </xacro:macro>
+
+  <!-- One corner standoff spanning the electronics bay. -->
+  <xacro:macro name="deck_standoff" params="x y">
+    <visual>
+      <origin
+        xyz="${x} ${y} ${lower_deck_top_z + deck_gap / 2.0 + deck_z_offset}"
+        rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${standoff_radius}" length="${deck_gap}"/>
+      </geometry>
+      <material name="sensor_grey"/>
+    </visual>
+  </xacro:macro>
+
   <xacro:macro name="mobile_base_chassis" params="prefix">
     <link name="${prefix}base_footprint"/>
 
@@ -9,21 +37,31 @@
       <origin xyz="0 0 ${base_link_height}" rpy="0 0 0"/>
     </joint>
 
+    <!-- The body is a dual-deck plate frame, not a solid block: separate
+         visuals for each plate and for the corner standoffs.
+         Collision stays a single bounding box over the whole body, so the
+         planner cannot route anything through the open electronics bay. -->
     <link name="${prefix}base_link">
-      <visual>
-        <geometry>
-          <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
-        </geometry>
-        <material name="base_dark"/>
-      </visual>
+      <xacro:deck_plate bottom_z="${lower_deck_bottom_z}"
+                        thickness="${lower_deck_thickness}"/>
+      <xacro:deck_plate bottom_z="${upper_deck_bottom_z}"
+                        thickness="${upper_deck_thickness}"/>
+
+      <xacro:deck_standoff x="${standoff_x}" y="${standoff_y}"/>
+      <xacro:deck_standoff x="${standoff_x}" y="${-standoff_y}"/>
+      <xacro:deck_standoff x="${-standoff_x}" y="${standoff_y}"/>
+      <xacro:deck_standoff x="${-standoff_x}" y="${-standoff_y}"/>
+
       <collision>
+        <origin xyz="0 0 ${chassis_center_z}" rpy="0 0 0"/>
         <geometry>
           <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
         </geometry>
       </collision>
+
       <xacro:box_inertial mass="${chassis_mass}"
                           x="${chassis_length}" y="${chassis_width}" z="${chassis_height}">
-        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <origin xyz="0 0 ${chassis_center_z}" rpy="0 0 0"/>
       </xacro:box_inertial>
     </link>
   </xacro:macro>

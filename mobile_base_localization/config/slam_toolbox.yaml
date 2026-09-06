@@ -38,25 +38,46 @@ slam_toolbox:
     minimum_travel_distance: 0.04
     minimum_travel_heading: 0.05
     check_min_dist_and_heading_precisely: true
-    scan_buffer_size: 20
+    # Raised from the stock 20. The chain is the running context the matcher
+    # aligns against, and a longer one costs only memory.
+    scan_buffer_size: 50
     scan_buffer_maximum_scan_distance: 4.0
     link_match_minimum_response_fine: 0.10
-    link_scan_maximum_distance: 1.5
+    # Raised from the stock 1.5 so scans a room apart can still link, but
+    # kept proportionate to a 10 m world.
+    link_scan_maximum_distance: 2.0
 
     # Loop closure tightened above the Jazzy reference defaults. The 4.0 m
     # LiDAR cannot see across this 10 x 8 m room, so the centre is a
     # feature-poor dead zone and the four long walls look alike to the
     # matcher. Marginal matches there rotate the whole pose graph.
     do_loop_closing: true
-    loop_search_maximum_distance: 3.0
-    loop_match_minimum_chain_size: 15
+    # Radius around the current pose in which loop-closure candidates are
+    # looked for. The stock 3.0 was sized for the 10 x 8 m navigation_basic
+    # room; at 20 x 20 a circuit accumulated drift far beyond it, the search
+    # never reached the earlier pose, and the map translated onto itself.
+    #
+    # my_world is now 10 x 10, so a circuit is roughly 30 m and this is set to
+    # cover more than half the room rather than the whole of it. A radius
+    # approaching the map size turns every similar-looking room into a
+    # candidate, which is how a false closure gets in.
+    loop_search_maximum_distance: 6.0
+    # A false loop closure is far worse than drift: it folds the map onto
+    # itself irrecoverably. An apartment of similar rectangular rooms is
+    # exactly the repetitive geometry that provokes one, so acceptance stays
+    # strict even though the search radius is now modest.
+    loop_match_minimum_chain_size: 20
     loop_match_maximum_variance_coarse: 3.0
-    loop_match_minimum_response_coarse: 0.45
-    loop_match_minimum_response_fine: 0.60
-    correlation_search_space_dimension: 0.5
+    loop_match_minimum_response_coarse: 0.55
+    loop_match_minimum_response_fine: 0.70
+    # Raised from 0.5: the local matcher searches +/- half this around the
+    # odometry prior, and mecanum lateral drift in a featureless corridor
+    # exceeds 0.25 m between keyframes.
+    correlation_search_space_dimension: 0.8
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
-    loop_search_space_dimension: 8.0
+    # Correlation window for loop closure, sized with the search radius.
+    loop_search_space_dimension: 10.0
     loop_search_space_resolution: 0.05
     loop_search_space_smear_deviation: 0.03
     distance_variance_penalty: 1.0

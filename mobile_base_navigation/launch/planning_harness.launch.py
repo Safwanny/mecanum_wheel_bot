@@ -42,6 +42,16 @@ def _planning_nodes(context):
     planner_config = LaunchConfiguration('planner_config')
     rviz_config = LaunchConfiguration('rviz_config')
 
+    # Under motion_profile:=primitive the overlay swaps GridBased's plugin
+    # type to the lattice planner, leaving the global_costmap block in
+    # planner.yaml as the single source of truth. Under holonomic the overlay
+    # resolves to planner.yaml itself, so the file is loaded twice and nothing
+    # changes - the harness stays a fast planning-only loop either way.
+    profile = LaunchConfiguration('motion_profile').perform(context)
+    overlay = LaunchConfiguration(
+        'planner_overlay_config' if profile == 'primitive' else 'planner_config',
+    )
+
     return [
         Node(
             package='nav2_map_server',
@@ -61,6 +71,7 @@ def _planning_nodes(context):
             name='planner_server',
             parameters=[
                 planner_config,
+                overlay,
                 {'use_sim_time': use_sim_time},
             ],
             output='screen',
@@ -130,6 +141,20 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('rviz', default_value='false'),
         DeclareLaunchArgument('goal_bridge', default_value='true'),
+        # primitive (default) is the eight-heading lattice; holonomic is
+        # SmacPlanner2D. Only the planner half of the profile exists here:
+        # the controller needs a robot, and this harness has none.
+        DeclareLaunchArgument(
+            'motion_profile',
+            default_value='primitive',
+            choices=['primitive', 'holonomic'],
+        ),
+        DeclareLaunchArgument(
+            'planner_overlay_config',
+            default_value=PathJoinSubstitution([
+                share, 'config', 'planner_lattice.yaml',
+            ]),
+        ),
         DeclareLaunchArgument(
             'planner_config',
             default_value=PathJoinSubstitution([
