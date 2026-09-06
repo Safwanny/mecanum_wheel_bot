@@ -107,16 +107,18 @@ def main():
     # printed part, and collision boxes bounding all of them. The planner must
     # never see the open electronics bay as passable.
     #
-    # Each deck is a cross in plan view - a full-length spine carrying the
-    # bumpers, plus a wing per side filling the space between that side's two
-    # wheels - so a deck is three visuals, not one.
+    # Each deck is the full body rectangle with the four wheel wells cut out,
+    # built from five butted boxes: a central spine, a full-width end cap at
+    # each end, and a wing per side between that side's two wheels. So a deck
+    # is five visuals, not one.
     BASE_LINK_HEIGHT = 0.040372215
-    SPINE = (0.240, 0.100)
-    WING = (0.08051114, 0.033802715)
-    # Widest point of the body, over the wings.
-    OVERALL_WIDTH = 0.16760543
     WHEELBASE = 0.150
     WHEEL_RADIUS = 0.03074443
+    # Widest point of the body, reached by both the caps and the wings.
+    OVERALL_WIDTH = 0.16760543
+    SPINE = (0.21948886, 0.100)
+    CAP = (0.02025557, OVERALL_WIDTH)
+    WING = (0.08051114, 0.033802715)
 
     def ground(z):
         return z + BASE_LINK_HEIGHT
@@ -153,22 +155,36 @@ def main():
 
     decks = boxes_of_footprint(chassis_visuals, SPINE)
     assert len(decks) == 2, 'expected exactly two deck spines'
+    deck_heights = {round(z_extent(deck)[0], 9) for deck in decks}
+
+    def mirrored_pairs(elements, axis):
+        offsets = sorted(xyz(e.find('origin'))[axis] for e in elements)
+        assert math.isclose(offsets[0], -offsets[3], abs_tol=1e-9)
+        assert math.isclose(offsets[1], -offsets[2], abs_tol=1e-9)
 
     # Two wings per deck, one either side, at matching heights.
     wings = boxes_of_footprint(chassis_visuals, WING)
     assert len(wings) == 4, 'expected two wings on each of the two decks'
-    wing_y = sorted(xyz(wing.find('origin'))[1] for wing in wings)
-    assert math.isclose(wing_y[0], -wing_y[3], abs_tol=1e-9)
-    assert math.isclose(wing_y[1], -wing_y[2], abs_tol=1e-9)
-    # The wings reach the wheel outer faces and no further, so the body's
-    # widest point is the wheel envelope rather than something proud of it.
+    mirrored_pairs(wings, 1)
+    # The wings reach the wheel outer faces and no further.
     for wing in wings:
         half_span = abs(xyz(wing.find('origin'))[1]) + WING[1] / 2.0
         assert math.isclose(2.0 * half_span, OVERALL_WIDTH, abs_tol=1e-6)
-    # Every wing shares a deck's height, so the wings are part of the plates
+
+    # Two end caps per deck, fore and aft. Each runs the full body width, so
+    # nothing can strike a wheel head on without hitting deck first.
+    caps = boxes_of_footprint(chassis_visuals, CAP)
+    assert len(caps) == 4, 'expected an end cap at each end of both decks'
+    mirrored_pairs(caps, 0)
+    for cap in caps:
+        assert math.isclose(
+            xyz(cap.find('origin'))[1], 0.0, abs_tol=1e-9), (
+            'an end cap is off the centreline')
+
+    # Every limb shares a deck's height, so they are parts of the plates
     # rather than floating slabs.
-    deck_heights = {round(z_extent(deck)[0], 9) for deck in decks}
-    assert {round(z_extent(wing)[0], 9) for wing in wings} == deck_heights
+    for limb in wings + caps:
+        assert round(z_extent(limb)[0], 9) in deck_heights
     deck_thicknesses = {
         float(visual.find('./geometry/box').attrib['size'].split()[2])
         for visual in decks
@@ -187,14 +203,16 @@ def main():
     # shaft height above its resting face, minus the plate thickness.
     assert 0.008 < lower_bottom < 0.012
 
-    # Collision follows the same cross the visuals do: a spine box and one box
-    # per wing. A single box over the whole envelope would reach out to the
-    # wheel outer faces along the entire body length and swallow the wheels.
+    # Collision follows the same outline the visuals do: one box per limb. A
+    # single box over the whole envelope would reach the wheel outer faces
+    # along the entire body length and swallow the wheels.
     chassis_collisions = chassis.findall('collision')
-    assert len(chassis_collisions) == 3, 'body collision is a spine plus wings'
+    assert len(chassis_collisions) == 5, 'body collision is one box per limb'
     spine_collisions = boxes_of_footprint(chassis_collisions, SPINE)
+    cap_collisions = boxes_of_footprint(chassis_collisions, CAP)
     wing_collisions = boxes_of_footprint(chassis_collisions, WING)
     assert len(spine_collisions) == 1
+    assert len(cap_collisions) == 2
     assert len(wing_collisions) == 2
 
     # Every limb spans the full body height, so nothing routes over or under.
@@ -236,13 +254,24 @@ def main():
             for (cx0, cx1), (cy0, cy1) in collision_footprints
         ), 'a deck visual escapes the collision cross'
 
-    # The wings must clear the wheels. A wheel reaches wheel_x_inner towards
-    # the middle of the robot at axle height; a wing collision that crossed
-    # that would sit inside a rotating wheel.
+    # The four wheel wells must stay open. A wheel spans wheel_x_inner to
+    # wheel_x_outer along the body at the outboard Y band, so a wing that
+    # reached past its inner bound, or a cap that reached past its outer one,
+    # would sit inside a rotating wheel.
     wheel_x_inner = WHEELBASE / 2.0 - WHEEL_RADIUS
+    wheel_x_outer = WHEELBASE / 2.0 + WHEEL_RADIUS
     for collision in wing_collisions:
         (wx0, wx1), _ = footprint(collision, box_size(collision))
         assert max(abs(wx0), abs(wx1)) < wheel_x_inner
+    for collision in cap_collisions:
+        (cx0, cx1), _ = footprint(collision, box_size(collision))
+        assert min(abs(cx0), abs(cx1)) > wheel_x_outer
+
+    # The caps span the full body width: that is what puts deck in front of
+    # and behind each wheel rather than leaving the wheel exposed end on.
+    for collision in cap_collisions:
+        _, (cy0, cy1) = footprint(collision, box_size(collision))
+        assert math.isclose(cy1 - cy0, OVERALL_WIDTH, abs_tol=1e-6)
 
     # Each motor stands on the lower deck and shares its wheel's joint origin,
     # so the motor frame sits on the output shaft it drives. Motors carry no

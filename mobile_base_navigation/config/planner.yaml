@@ -27,9 +27,11 @@ global_costmap:
       update_frequency: 1.0
       publish_frequency: 1.0
       transform_tolerance: 0.30
-      # Circumscribed radius of the base is 0.1367 m; a circular footprint
-      # suits a holonomic base with no preferred heading.
-      robot_radius: 0.14
+      # Circumscribed radius of the base is 0.1547 m, set by the corner of a
+      # full-width bumper cap; a circular footprint suits a holonomic base
+      # with no preferred heading. Raising chassis_length pushes that corner
+      # further out, so this value moves with it.
+      robot_radius: 0.16
       # Matches the saved map resolution exactly.
       resolution: 0.05
       track_unknown_space: true

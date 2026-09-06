@@ -5,13 +5,15 @@
        and the full height from lower deck underside to upper deck top. It is
        what the single collision box and the Nav2 footprint are derived from. -->
   <!-- chassis_length is the bumper-to-bumper span: the decks reach past the
-       wheels front and rear so the body takes a knock before a wheel does.
-       Ceiling is 0.250. Past that the spine corner overtakes the wheel
-       envelope as the circumscribed radius and Nav2's robot_radius (0.14 in
-       planner.yaml and local_costmap.yaml) no longer covers the body. -->
-  <xacro:property name="chassis_length" value="0.240"/>
-  <!-- Spine width. The decks also carry side wings out to the wheel outer
-       faces; chassis_overall_width below is the true widest point. -->
+       wheels front and rear so the body takes a knock before a wheel does,
+       and the end caps run the full body width so a wheel cannot be struck
+       head on. Raising it pushes the cap corner further out, which is the
+       body's circumscribed radius - Nav2's robot_radius must keep covering
+       it, so planner.yaml and local_costmap.yaml move with this value. -->
+  <xacro:property name="chassis_length" value="0.260"/>
+  <!-- Width of the central spine. The end caps and the side wings both reach
+       out to the wheel outer faces; chassis_overall_width is the real widest
+       point of the body. -->
   <xacro:property name="chassis_width" value="0.100"/>
 
   <!-- Dual-deck plates. The decks are 3D-printed sheet, not a solid block, so
@@ -65,20 +67,36 @@
   <xacro:property name="wheel_separation" value="0.134"/>
   <xacro:property name="wheel_diameter" value="${2.0 * wheel_radius}"/>
 
-  <!-- Deck cross section, in plan view. Each deck is a full-length spine at
-       chassis_width, plus a wing on each side filling the open space between
-       the front and rear wheel of that side. The wings butt against the spine
-       edges rather than overlapping them: coplanar faces z-fight in RViz.
+  <!-- Deck outline, in plan view. Each deck is the full body rectangle with
+       the four wheel wells cut out of it, built from five butted boxes:
 
-       The wings reach out to the wheel outer faces and stop short of the
-       wheels in X, so they add deck area without ever fouling a rotating
-       wheel. Every bound below is derived from the wheel geometry, so moving
-       a wheel moves the wings with it. -->
+           +===============================+   front cap, full body width
+           |      :                 :      |
+           |      +===+=========+===+      |   wheel wells, left and right
+           |          |  wing   |          |
+           |    spine |         |          |
+           |          |  wing   |          |
+           |      +===+=========+===+      |
+           |      :                 :      |
+           +===============================+   rear cap, full body width
+
+       A central spine at chassis_width running between the caps, an end cap
+       at each end spanning the full body width, and a wing on each side
+       filling the space between that side's two wheels. The five boxes butt
+       against each other rather than overlapping: coplanar faces z-fight in
+       RViz, and a box reaching into a wheel well would foul a wheel.
+
+       Every bound derives from the wheel geometry, so moving a wheel moves
+       the deck outline with it. -->
   <xacro:property name="wheel_outer_y"
                   value="${wheel_separation / 2.0 + wheel_width / 2.0}"/>
   <!-- Innermost point a wheel reaches along X, at the axle height. -->
   <xacro:property name="wheel_x_inner"
                   value="${wheelbase / 2.0 - wheel_radius}"/>
+  <!-- Outermost point a wheel reaches along X. -->
+  <xacro:property name="wheel_x_outer"
+                  value="${wheelbase / 2.0 + wheel_radius}"/>
+  <!-- Free space left around the wheels wherever deck meets wheel well. -->
   <xacro:property name="wing_clearance_x" value="0.004"/>
   <xacro:property name="wing_length"
                   value="${2.0 * (wheel_x_inner - wing_clearance_x)}"/>
@@ -86,6 +104,18 @@
                   value="${wheel_outer_y - chassis_width / 2.0}"/>
   <xacro:property name="wing_y"
                   value="${(chassis_width / 2.0 + wheel_outer_y) / 2.0}"/>
+
+  <!-- End caps. Each spans the full body width in front of, or behind, that
+       end's pair of wheels, so an impact lands on deck rather than on a wheel.
+       The cap starts one clearance outboard of the wheels and runs to the
+       bumper line, and the spine runs between the two caps. -->
+  <xacro:property name="cap_inner_x"
+                  value="${wheel_x_outer + wing_clearance_x}"/>
+  <xacro:property name="cap_length"
+                  value="${chassis_length / 2.0 - cap_inner_x}"/>
+  <xacro:property name="cap_x"
+                  value="${cap_inner_x + cap_length / 2.0}"/>
+  <xacro:property name="spine_length" value="${2.0 * cap_inner_x}"/>
   <!-- The widest point of the body, over the wings. -->
   <xacro:property name="chassis_overall_width" value="${2.0 * wheel_outer_y}"/>
 

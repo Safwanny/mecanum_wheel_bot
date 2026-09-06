@@ -5,40 +5,56 @@
 
   <!-- One deck plate, placed by the ground-referenced z of its bottom face.
 
-       The plate is a cross in plan view: a full-length spine at chassis_width
-       carrying the bumpers, plus a wing on each side filling the open space
-       between that side's two wheels. Three boxes rather than one, because
-       URDF has no cross primitive - and because a single box over the whole
-       envelope would swallow the wheels.
+       The plate is the full body rectangle with the four wheel wells cut out,
+       built from five butted boxes: a central spine, an end cap at each end
+       spanning the full body width, and a side wing filling the space between
+       each side's two wheels. URDF has no such primitive, and one box over
+       the whole envelope would swallow the wheels.
 
-       The wings butt against the spine edges instead of overlapping them.
-       Overlapping boxes share coplanar faces, which z-fight in RViz. -->
+       The boxes butt rather than overlap. Overlapping boxes share coplanar
+       faces, which z-fight in RViz. -->
   <xacro:macro name="deck_plate" params="bottom_z thickness">
-    <visual>
-      <origin xyz="0 0 ${bottom_z + thickness / 2.0 + deck_z_offset}"
-              rpy="0 0 0"/>
-      <geometry>
-        <box size="${chassis_length} ${chassis_width} ${thickness}"/>
-      </geometry>
-      <material name="base_dark"/>
-    </visual>
+    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
+                     x="0" y="0"
+                     length="${spine_length}" width="${chassis_width}"/>
 
-    <xacro:deck_wing bottom_z="${bottom_z}" thickness="${thickness}"
-                     y="${wing_y}"/>
-    <xacro:deck_wing bottom_z="${bottom_z}" thickness="${thickness}"
-                     y="${-wing_y}"/>
+    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
+                     x="${cap_x}" y="0"
+                     length="${cap_length}"
+                     width="${chassis_overall_width}"/>
+    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
+                     x="${-cap_x}" y="0"
+                     length="${cap_length}"
+                     width="${chassis_overall_width}"/>
+
+    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
+                     x="0" y="${wing_y}"
+                     length="${wing_length}" width="${wing_width}"/>
+    <xacro:deck_slab bottom_z="${bottom_z}" thickness="${thickness}"
+                     x="0" y="${-wing_y}"
+                     length="${wing_length}" width="${wing_width}"/>
   </xacro:macro>
 
-  <!-- One side wing of a deck plate. -->
-  <xacro:macro name="deck_wing" params="bottom_z thickness y">
+  <!-- One rectangular piece of a deck plate. -->
+  <xacro:macro name="deck_slab" params="bottom_z thickness x y length width">
     <visual>
-      <origin xyz="0 ${y} ${bottom_z + thickness / 2.0 + deck_z_offset}"
+      <origin xyz="${x} ${y} ${bottom_z + thickness / 2.0 + deck_z_offset}"
               rpy="0 0 0"/>
       <geometry>
-        <box size="${wing_length} ${wing_width} ${thickness}"/>
+        <box size="${length} ${width} ${thickness}"/>
       </geometry>
       <material name="base_dark"/>
     </visual>
+  </xacro:macro>
+
+  <!-- One collision limb, spanning the full body height. -->
+  <xacro:macro name="deck_limb_collision" params="x y length width">
+    <collision>
+      <origin xyz="${x} ${y} ${chassis_center_z}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${length} ${width} ${chassis_height}"/>
+      </geometry>
+    </collision>
   </xacro:macro>
 
   <!-- One corner standoff spanning the electronics bay. -->
@@ -60,22 +76,31 @@
                            - (lower_deck_bottom_z
                               + lower_deck_thickness / 2.0)}"/>
   <xacro:property name="deck_pair_mass" value="${2.0 * deck_mass}"/>
-  <!-- Plan-view second moments of one cross-shaped plate, summed over the
-       spine and the two wings about the plate centre. Each limb contributes
-       its own box term plus its offset from that centre. -->
+  <!-- Plan-view second moments of one deck plate about its own centre,
+       summed over the five limbs. Each limb contributes its own rectangle
+       term plus the parallel-axis term for its offset from that centre.
+       Dividing by deck_area turns these into the radii of gyration the
+       inertial below scales by mass. -->
   <xacro:property name="deck_ixx_plan"
-                  value="${(chassis_length * chassis_width
+                  value="${(spine_length * chassis_width
                             * chassis_width * chassis_width) / 12.0
+                           + 2.0 * (cap_length * chassis_overall_width
+                                    * chassis_overall_width
+                                    * chassis_overall_width) / 12.0
                            + 2.0 * (wing_length * wing_width
                                     * (wing_width * wing_width / 12.0
                                        + wing_y * wing_y))}"/>
   <xacro:property name="deck_iyy_plan"
-                  value="${(chassis_width * chassis_length
-                            * chassis_length * chassis_length) / 12.0
+                  value="${(chassis_width * spine_length
+                            * spine_length * spine_length) / 12.0
+                           + 2.0 * (cap_length * chassis_overall_width
+                                    * (cap_length * cap_length / 12.0
+                                       + cap_x * cap_x))
                            + 2.0 * (wing_width * wing_length
                                     * wing_length * wing_length) / 12.0}"/>
   <xacro:property name="deck_area"
-                  value="${chassis_length * chassis_width
+                  value="${spine_length * chassis_width
+                           + 2.0 * cap_length * chassis_overall_width
                            + 2.0 * wing_length * wing_width}"/>
 
   <xacro:macro name="deck_pair_inertial">
@@ -109,10 +134,10 @@
     <!-- The body is a dual-deck plate frame, not a solid block: separate
          visuals for each plate, each wing, and each corner standoff.
 
-         Collision follows the same cross, one box per limb, spanning the full
-         body height. The planner still cannot route through the open
-         electronics bay, but the wings' boxes stop short of the wheels in X
-         instead of a single envelope box engulfing them. -->
+         Collision follows the same outline, one box per limb, spanning the
+         full body height. The planner still cannot route through the open
+         electronics bay, but the limbs leave the four wheel wells open
+         instead of a single envelope box engulfing the wheels. -->
     <link name="${prefix}base_link">
       <xacro:deck_plate bottom_z="${lower_deck_bottom_z}"
                         thickness="${lower_deck_thickness}"/>
@@ -124,24 +149,21 @@
       <xacro:deck_standoff x="${-standoff_x}" y="${standoff_y}"/>
       <xacro:deck_standoff x="${-standoff_x}" y="${-standoff_y}"/>
 
-      <collision>
-        <origin xyz="0 0 ${chassis_center_z}" rpy="0 0 0"/>
-        <geometry>
-          <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
-        </geometry>
-      </collision>
-      <collision>
-        <origin xyz="0 ${wing_y} ${chassis_center_z}" rpy="0 0 0"/>
-        <geometry>
-          <box size="${wing_length} ${wing_width} ${chassis_height}"/>
-        </geometry>
-      </collision>
-      <collision>
-        <origin xyz="0 ${-wing_y} ${chassis_center_z}" rpy="0 0 0"/>
-        <geometry>
-          <box size="${wing_length} ${wing_width} ${chassis_height}"/>
-        </geometry>
-      </collision>
+      <xacro:deck_limb_collision x="0" y="0"
+                                 length="${spine_length}"
+                                 width="${chassis_width}"/>
+      <xacro:deck_limb_collision x="${cap_x}" y="0"
+                                 length="${cap_length}"
+                                 width="${chassis_overall_width}"/>
+      <xacro:deck_limb_collision x="${-cap_x}" y="0"
+                                 length="${cap_length}"
+                                 width="${chassis_overall_width}"/>
+      <xacro:deck_limb_collision x="0" y="${wing_y}"
+                                 length="${wing_length}"
+                                 width="${wing_width}"/>
+      <xacro:deck_limb_collision x="0" y="${-wing_y}"
+                                 length="${wing_length}"
+                                 width="${wing_width}"/>
 
       <!-- The structural mass is the two plates, so it is carried at the
            plates rather than at the mid-height of an imaginary solid body.

@@ -121,27 +121,31 @@ battery and boards that ride on them - plus a box collision per deck limb.
 Splitting the visuals while keeping collision closed is deliberate: the planner
 must never see the open electronics bay between the decks as passable geometry.
 
-Each deck is a cross in plan view, not a rectangle:
+Each deck is the full body rectangle with the four wheel wells cut out of it,
+built from five butted boxes:
 
 | Limb | Extent |
 | --- | --- |
-| Spine, bumper to bumper | 0.240 m x 0.100 m |
+| Central spine | 0.2195 m x 0.100 m |
+| End caps, fore and aft | 0.0203 m x 0.1676 m |
 | Side wings, one per side | 0.0805 m x 0.0338 m |
-| Overall width, over the wings | 0.1676 m |
+| Overall body | 0.260 m x 0.1676 m |
 
-The spine runs 12 mm proud of the wheels front and rear, so the body takes a
-knock before a wheel does. The wings fill the open space between each side's
-two wheels, reaching out to the wheel outer faces and stopping
-`wing_clearance_x` short of the wheels in X so they never foul a rotating one.
-Every wing bound derives from the wheel geometry, so moving a wheel moves the
-wings with it.
+The end caps run the full body width 20 mm in front of and behind the wheels,
+so nothing strikes a wheel head on without hitting deck first. The wings fill
+the space between each side's two wheels. Both reach out to the wheel outer
+faces, and every limb stands `wing_clearance_x` clear of the wheels, leaving
+four open wheel wells. Every bound derives from the wheel geometry, so moving a
+wheel moves the deck outline with it.
 
-Collision follows the same cross, one box per limb. A single box over the whole
-envelope would reach the wheel outer faces along the entire body length and
-swallow the wheels. It also keeps the footprint honest: the circumscribed
-radius stays the wheel envelope at 0.1349 m rather than a bounding-box corner
-at 0.1464 m, which is why Nav2's `robot_radius` of 0.14 m still covers the
-body. `chassis_length` may not exceed 0.250 m without revisiting that.
+Collision follows the same outline, one box per limb. A single box over the
+whole envelope would reach the wheel outer faces along the entire body length
+and swallow the wheels.
+
+The body's circumscribed radius is the cap corner at 0.1547 m, so Nav2's
+`robot_radius` is 0.16 m in `planner.yaml` and `local_costmap.yaml`. Raising
+`chassis_length` pushes that corner further out and those two values must move
+with it.
 
 The vertical stack hangs off the wheel radius. The motors stand on the lower
 deck and drive the wheels directly, so the deck's top face is pinned exactly
@@ -427,7 +431,7 @@ Costmap sizing is derived from the robot rather than copied:
 
 | Parameter | Value | Derivation |
 | --- | --- | --- |
-| `robot_radius` | 0.14 | Circumscribed radius is `sqrt(0.108² + 0.0838²) = 0.1367` from `properties.xacro`, rounded up |
+| `robot_radius` | 0.16 | Circumscribed radius is the end-cap corner, `sqrt(0.130² + 0.0838²) = 0.1547` from `properties.xacro`, rounded up |
 | `inflation_radius` | 0.30 | Exceeds the footprint for a usable gradient, and leaves a zero-cost band in the 0.925 m gap at the interior wall's north end |
 | `resolution` | 0.05 | Matches the saved map exactly; a mismatch causes resampling artifacts |
 | `obstacle_max_range` | 3.5 | Inside the 4.0 m LiDAR maximum, so max-range returns never mark obstacles |

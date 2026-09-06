@@ -16,7 +16,8 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.14
+      # Must match the global costmap; see planner.yaml for the derivation.
+      robot_radius: 0.16
       always_send_full_costmap: true
       plugins: ["obstacle_layer", "inflation_layer"]
 
