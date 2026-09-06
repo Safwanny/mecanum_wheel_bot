@@ -866,10 +866,11 @@ Gazebo plugin/sensor instantiation.
 | `properties.xacro` | Shared robot and sensor dimensions, masses, poses, rates, ranges, and noise |
 | `materials.xacro` | Named visual materials |
 | `inertials.xacro` | Reusable inertial macros |
-| `chassis.xacro` | `base_footprint`, `base_link`, the dual-deck body visuals, and the single bounding collision |
+| `chassis.xacro` | `base_footprint`, `base_link`, the cross-shaped dual-deck body visuals, and the bounding collision limbs |
 | `macros/mecanum_wheels.xacro` | Driven wheel links, visual meshes, cylinder collisions, inertials, and joints |
 | `macros/motors.xacro` | TT gearmotor links, visual mesh, and fixed joints |
-| `base.xacro` | Chassis plus the four wheel and four motor assemblies |
+| `macros/components.xacro` | Deck-mounted battery and board links, visuals, inertials, and fixed joints |
+| `base.xacro` | Chassis plus the four wheel and four motor assemblies, the battery, the two motor drivers, and the MCU |
 | `camera.xacro` | Front RGB camera link, optical frame, fixed joints, geometry, and inertia |
 | `lidar.xacro` / `imu.xacro` | Fixed physical sensor links, joints, geometry, and inertia |
 | `mobile_base.ros2_control.xacro` | ros2_control hardware and command/state interfaces |

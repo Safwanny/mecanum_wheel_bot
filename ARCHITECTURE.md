@@ -116,10 +116,32 @@ derives its own value.
 ## Body geometry
 
 The body is a dual-deck plate frame, not a solid block. `base_link` carries one
-visual per printed part - two 10 mm deck plates and four corner standoffs -
-plus a single box collision spanning the whole body. Splitting the visuals
-while keeping one collision is deliberate: the planner must never see the open
-electronics bay between the decks as passable geometry.
+visual per printed part - two 10 mm deck plates, four corner standoffs, and the
+battery and boards that ride on them - plus a box collision per deck limb.
+Splitting the visuals while keeping collision closed is deliberate: the planner
+must never see the open electronics bay between the decks as passable geometry.
+
+Each deck is a cross in plan view, not a rectangle:
+
+| Limb | Extent |
+| --- | --- |
+| Spine, bumper to bumper | 0.240 m x 0.100 m |
+| Side wings, one per side | 0.0805 m x 0.0338 m |
+| Overall width, over the wings | 0.1676 m |
+
+The spine runs 12 mm proud of the wheels front and rear, so the body takes a
+knock before a wheel does. The wings fill the open space between each side's
+two wheels, reaching out to the wheel outer faces and stopping
+`wing_clearance_x` short of the wheels in X so they never foul a rotating one.
+Every wing bound derives from the wheel geometry, so moving a wheel moves the
+wings with it.
+
+Collision follows the same cross, one box per limb. A single box over the whole
+envelope would reach the wheel outer faces along the entire body length and
+swallow the wheels. It also keeps the footprint honest: the circumscribed
+radius stays the wheel envelope at 0.1349 m rather than a bounding-box corner
+at 0.1464 m, which is why Nav2's `robot_radius` of 0.14 m still covers the
+body. `chassis_length` may not exceed 0.250 m without revisiting that.
 
 The vertical stack hangs off the wheel radius. The motors stand on the lower
 deck and drive the wheels directly, so the deck's top face is pinned exactly
@@ -129,9 +151,11 @@ one motor shaft offset below the wheel axle:
 | --- | --- |
 | Lower deck underside (ground clearance) | 0.0095 m |
 | Lower deck top, motors stand here | 0.0195 m |
+| Motor driver tops | 0.0312 m |
+| Battery top | 0.0445 m |
 | Motor tops | 0.0419 m |
 | Upper deck underside, IMU hangs here | 0.0595 m |
-| Upper deck top, LiDAR stands here | 0.0695 m |
+| Upper deck top, LiDAR and MCU stand here | 0.0695 m |
 | LiDAR scan plane | 0.0915 m |
 | Overall height | 0.0995 m |
 
@@ -157,11 +181,61 @@ every existing TF offset, controller gain and test expectation still holds.
 Each motor is its own link, parented to `base_link` at the same origin as the
 wheel it drives - the link frame is the output shaft. The wheel joints stay
 parented directly to `base_link`, so the drive chain and kinematics are
-untouched. Motors carry negligible inertia: the Gazebo URDF reduction lumps
-fixed-joint children into the parent, and `chassis_mass` is already the
-whole-body mass of the validated model. They also carry no collision, both
-because the body box already covers them and because an extra collision would
-break the one-surface-per-wheel contract the SDF generator enforces.
+untouched. Motors carry no collision, both because the body box already covers
+them and because an extra collision would break the one-surface-per-wheel
+contract the SDF generator enforces. Their inertia sits at the body centroid
+rather than at the link origin, which is the output shaft nearly 30 mm away.
+
+## Mounted components
+
+The battery and the boards ride on the decks as fixed-joint children of
+`base_link`. Each link origin is the part's own centroid, so its inertial sits
+at the link origin, the Gazebo reduction lumps it in with the right
+parallel-axis term, and every component frame is where its mass actually is.
+
+| Part | Deck | Centre (x, y) | Footprint | Mass |
+| --- | --- | --- | --- | --- |
+| 2S LiPo | lower | (0, 0) | 0.138 x 0.047 m | 0.250 kg |
+| TB6612FNG driver, two | lower | (0, +/-0.045) | 0.020 x 0.0204 m | 0.003 kg |
+| ESP32-S3 devkit | upper, on top | (-0.085, 0) | 0.0605 x 0.0252 m | 0.012 kg |
+
+The battery is the single heaviest part and sits low and central, pulling the
+centre of mass down rather than sideways. The drivers flank it in the mid-band
+where no motor reaches. The MCU sits at the rear of the upper deck with its
+USB-C facing aft, so it can be flashed without taking the robot apart.
+
+The lower deck keeps two bays deliberately empty, claimed by properties so
+later geometry cannot creep into them: the front bay for the buck converters
+and the rear bay for the main power switch and the battery voltage divider.
+
+The board meshes are authored neither centred nor axis-aligned to the robot, so
+each instance carries a visual pose that seats the mesh's own bounding-box
+centre on the link origin - the same per-instance convention the wheel and
+motor macros use. Inertia comes from the measured bounding box rather than the
+mesh: a board is close enough to a uniform slab.
+
+### Mass budget
+
+`total_body_mass` is `base_link`'s mass after the Gazebo reduction has lumped in
+every fixed-joint child. Components carry their real masses and the two deck
+plates absorb the balance, so the total is held by construction rather than by
+a constant that goes stale whenever a part is added. The plates are the right
+place for it: they also stand in for the fasteners, wiring, and the reserved
+power components.
+
+| Item | Mass |
+| --- | --- |
+| Battery | 0.250 kg |
+| Four TT gearmotors | 0.120 kg |
+| Two TB6612FNG drivers | 0.006 kg |
+| ESP32-S3 devkit | 0.012 kg |
+| LiDAR, IMU, camera | 0.190 kg |
+| Two deck plates, the balance | 1.222 kg |
+| **`total_body_mass`** | **1.800 kg** |
+
+The wheels hang off revolute joints, so they are not lumped and are not counted
+here. The resulting centre of mass sits 0.0415 m above ground on the
+centreline, 1.3 mm lower than before the battery was modelled.
 
 ## Canonical mecanum contact
 
