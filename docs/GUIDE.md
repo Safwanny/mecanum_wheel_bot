@@ -1,15 +1,149 @@
 # GUIDE — running, driving and inspecting the robot
 
-Every command lives here. [README.md](../README.md) says what the robot is and
-which algorithms it uses; [ARCHITECTURE.md](../ARCHITECTURE.md) says how the
-pieces are wired and what has been measured.
+Every command lives here. [README.md](../README.md) explains what the robot is
+and why it works the way it does; [ARCHITECTURE.md](../ARCHITECTURE.md) is the
+reference for frames, topics, measurements and derivations.
 
-One rule before anything else: **render with `ogre2`**. Ogre1 is retained only
-for software-rendered checks, and it does not merely degrade the range sensors,
-it corrupts them quietly - cloud shapes and timestamps stay valid while the
-numbers are wrong. Any range read off an Ogre1 run is not evidence.
+## Two rules before anything else
 
-## Quick start: empty world to autonomous navigation
+**Always render with `ogre2`.** The legacy Ogre1 backend does not fail loudly on
+range sensors — cloud shapes and timestamps stay valid while the numbers are
+wrong. Any range read off an Ogre1 run is not evidence.
+
+**Always stop cleanly when you are done.** Leftover Gazebo servers hold memory
+until unrelated things start failing:
+
+```bash
+ros2 run mobile_base_tools stop_simulation
+```
+
+## Contents
+
+| Part | What it covers |
+| --- | --- |
+| [0](#part-0--stopping-cleanly-and-running-the-tests) | Stopping cleanly, running the tests |
+| [1](#part-1--build-and-first-run) | Build, launch a simulation |
+| [2](#part-2--drive-map-localize-navigate) | The full workflow, start to finish |
+| [3](#part-3--mapping-and-saved-map-localization-in-depth) | Mapping and AMCL in depth |
+| [4](#part-4--costmaps-and-path-planning-in-depth) | Costmaps and planning in depth |
+| [5](#part-5--driving-it-by-hand) | Teleoperation |
+| [6](#part-6--repeatable-motion-checks) | Open-loop motion accuracy checks |
+| [7](#part-7--the-tof-perimeter) | The ToF ring: running it, proving it works |
+| [8](#part-8--inspecting-a-running-robot) | Introspecting frames, topics, parameters |
+
+---
+
+## The whole thing in one pass
+
+If you only want to see it work, this is the shortest complete path from a fresh
+clone to the robot driving itself. Each step is expanded later in the guide.
+
+```bash
+# 1. Build once.
+cd ~/ros2_ws && colcon build && source install/setup.bash
+
+# 2. Map a world. Drive it around with teleop until the map looks complete.
+ros2 launch mobile_base_bringup mapping.launch.py world:=navigation_basic render_engine:=ogre2
+
+# 3. In a second terminal, save the map, then stop the first terminal.
+ros2 run nav2_map_server map_saver_cli \
+  -f "$HOME/ros2_ws/src/mobile_base/maps/navigation_basic" \
+  --ros-args -p save_map_timeout:=10000.0
+
+# 4. Navigate. Set "2D Pose Estimate" in RViz, then "2D Goal Pose".
+ros2 launch mobile_base_navigation planning.launch.py \
+  world:=navigation_basic \
+  map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml" \
+  render_engine:=ogre2
+
+# 5. Always finish here.
+ros2 run mobile_base_tools stop_simulation
+```
+
+Two things that catch people out: **navigation does nothing until you set an
+initial pose** (or pass `autostart:=true`), and the **e-stop is engaged at
+startup** by design — Part 4 covers releasing it.
+
+---
+
+## Part 0 — Stopping cleanly, and running the tests
+
+Run this after every session, and any time the machine feels slow:
+
+```bash
+ros2 run mobile_base_tools stop_simulation
+```
+
+Add `--dry-run` to see what it would kill without killing it.
+
+**Do not try to do this with `pkill` on a name.** Three separate traps make that
+unreliable, and each one has cost real debugging time here:
+
+- The Gazebo server's process name is **`ruby`**. Only its command line says
+  `gz sim`, so `pkill gz` never matches it. Three of these once accumulated at
+  ~640 MB each and quietly starved the controller manager until launch tests
+  began failing with no obvious cause.
+- `robot_state_publisher` is started with a generated parameter file, so its
+  command line contains **no package name at all** - only
+  `/tmp/launch_params_<random>`. No package-shaped pattern will find it.
+- Gazebo does not always honour SIGINT. The launch logs say so outright:
+  *"failed to terminate 5 seconds after receiving SIGINT"*.
+
+A launch started with `setsid` or `nohup` also outlives the terminal that
+started it, so closing the window leaves the whole stack running.
+
+Leftovers are not harmless. They hold memory, and once memory is tight the
+controller manager times out waiting for `robot_description` and the launch
+tests fail for reasons that look nothing like the actual cause.
+
+### Running the full test suite
+
+On this machine, use a sequential executor. In parallel the Gazebo launch test
+competes for memory with the other packages and fails spuriously:
+
+```bash
+colcon test --executor sequential && colcon test-result --verbose
+```
+
+---
+
+## Part 1 — Build and first run
+
+```bash
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select \
+  mobile_base_description mobile_base_gazebo mobile_base_localization \
+  mobile_base_tools mobile_base_bringup
+source install/setup.bash
+xacro src/mobile_base/mobile_base_description/urdf/mobile_base.urdf.xacro > /tmp/mobile_base.urdf
+check_urdf /tmp/mobile_base.urdf
+ros2 launch mobile_base_description display.launch.py
+```
+
+This command is only for inspecting the URDF without Gazebo. It uses a headless
+joint-state publisher by default so every movable link remains visible. To show the
+optional joint sliders, add `use_joint_state_gui:=true` and keep that GUI open.
+
+### Launching a simulation
+
+```bash
+ros2 launch mobile_base_bringup simulation.launch.py
+```
+
+`world` accepts an installed world name (with or without `.sdf`) or an absolute
+SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
+`start_controller`, `localization`, `render_engine`, `velocity_smoother`,
+`physics_max_step_size`, `x`, `y`, `z`, and `yaw`. Mecanum contact is canonical
+and has no runtime model selector or contact-tuning launch arguments.
+Phase 1 intentionally supports one un-namespaced robot. A misleading partial
+`namespace` argument was removed rather than implying multi-robot support.
+
+Wheel appearance comes from the full position-specific mecanum wheel meshes.
+Wheel-ground contact always uses the canonical model described below.
+
+---
+
+## Part 2 — Drive, map, localize, navigate
 
 The complete path, in order, with every command. Each stage builds on the one
 before it. The repository ships no map, so you must run stages 2 and 3 once
@@ -191,7 +325,9 @@ ros2 topic info /mobile_base_controller/reference -v | grep -i "publisher count"
 ros2 topic hz /mobile_base_controller/reference
 ```
 
-## Phase 2: mapping and saved-map localization
+---
+
+## Part 3 — Mapping and saved-map localization in depth
 
 Phase 2 provides two deliberately separate operating modes. They are mutually
 exclusive: stop one mode before starting the other.
@@ -516,7 +652,9 @@ and cannot produce a usable map. Phase 2 does not add planners, controller
 servers, behavior trees, goal execution, obstacle avoidance, command
 arbitration, velocity smoothing, or any other autonomous-navigation component.
 
-## Phase 3a: costmaps and global path planning
+---
+
+## Part 4 — Costmaps and path planning in depth
 
 Phase 3a adds Nav2 costmaps and a global planner on top of saved-map
 localization. It plans and displays routes; it cannot move the robot. There is
@@ -755,41 +893,9 @@ measurement of its own, and no hardware exposure. It is the default because its
 motion is legible, not because it is better characterised — `holonomic` remains
 the profile every number in this README was measured against.
 
-## Build and inspect
+---
 
-```bash
-cd ~/ros2_ws
-colcon build --symlink-install --packages-select \
-  mobile_base_description mobile_base_gazebo mobile_base_localization \
-  mobile_base_tools mobile_base_bringup
-source install/setup.bash
-xacro src/mobile_base/mobile_base_description/urdf/mobile_base.urdf.xacro > /tmp/mobile_base.urdf
-check_urdf /tmp/mobile_base.urdf
-ros2 launch mobile_base_description display.launch.py
-```
-
-This command is only for inspecting the URDF without Gazebo. It uses a headless
-joint-state publisher by default so every movable link remains visible. To show the
-optional joint sliders, add `use_joint_state_gui:=true` and keep that GUI open.
-
-## Simulate
-
-```bash
-ros2 launch mobile_base_bringup simulation.launch.py
-```
-
-`world` accepts an installed world name (with or without `.sdf`) or an absolute
-SDF path. The launch also exposes `use_sim_time`, `gui`, `rviz`,
-`start_controller`, `localization`, `render_engine`, `velocity_smoother`,
-`physics_max_step_size`, `x`, `y`, `z`, and `yaw`. Mecanum contact is canonical
-and has no runtime model selector or contact-tuning launch arguments.
-Phase 1 intentionally supports one un-namespaced robot. A misleading partial
-`namespace` argument was removed rather than implying multi-robot support.
-
-Wheel appearance comes from the full position-specific mecanum wheel meshes.
-Wheel-ground contact always uses the canonical model described below.
-
-## Teleoperation
+## Part 5 — Driving it by hand
 
 The Jazzy `mecanum_drive_controller` accepts stamped velocity commands on
 `/mobile_base_controller/reference`.
@@ -878,7 +984,9 @@ this patch. Future Nav2, SLAM, localization, joystick, or autonomy sources shoul
 a mux/safety layer first, then publish to `/mobile_base_controller/reference`. Future
 localization owns `map -> odom`; the base controller owns only `odom -> base_footprint`.
 
-## Open-loop motion test
+---
+
+## Part 6 — Repeatable motion checks
 
 With the simulation running, execute the repeatable mecanum visual check in another
 terminal:
@@ -922,46 +1030,9 @@ Check forward, reverse, both strafes, both rotations, and all four diagonal
 combinations. Confirm the corresponding Gazebo pose changes, the driven-wheel sign
 pattern, and passive roller velocity in `/joint_states`.
 
-## Stopping the simulation cleanly
+---
 
-Run this after every session, and any time the machine feels slow:
-
-```bash
-ros2 run mobile_base_tools stop_simulation
-```
-
-Add `--dry-run` to see what it would kill without killing it.
-
-**Do not try to do this with `pkill` on a name.** Three separate traps make that
-unreliable, and each one has cost real debugging time here:
-
-- The Gazebo server's process name is **`ruby`**. Only its command line says
-  `gz sim`, so `pkill gz` never matches it. Three of these once accumulated at
-  ~640 MB each and quietly starved the controller manager until launch tests
-  began failing with no obvious cause.
-- `robot_state_publisher` is started with a generated parameter file, so its
-  command line contains **no package name at all** - only
-  `/tmp/launch_params_<random>`. No package-shaped pattern will find it.
-- Gazebo does not always honour SIGINT. The launch logs say so outright:
-  *"failed to terminate 5 seconds after receiving SIGINT"*.
-
-A launch started with `setsid` or `nohup` also outlives the terminal that
-started it, so closing the window leaves the whole stack running.
-
-Leftovers are not harmless. They hold memory, and once memory is tight the
-controller manager times out waiting for `robot_description` and the launch
-tests fail for reasons that look nothing like the actual cause.
-
-### Running the full test suite
-
-On this machine, use a sequential executor. In parallel the Gazebo launch test
-competes for memory with the other packages and fails spuriously:
-
-```bash
-colcon test --executor sequential && colcon test-result --verbose
-```
-
-## The ToF perimeter
+## Part 7 — The ToF perimeter
 
 Eight VL53L7CX sensors ring the lower deck, each reporting an 8x8 grid of zones
 over a 60 degree field. They exist to see the band the LiDAR cannot: the scan
@@ -1031,7 +1102,9 @@ Costmaps only exist once navigation is running, which needs a saved map. Map
 and enable the **Local costmap** display in RViz. Approaching a low obstacle
 should raise lethal cells where the LiDAR shows nothing.
 
-## Inspecting a running robot
+---
+
+## Part 8 — Inspecting a running robot
 
 The camera has its own window and its own command, deliberately separate from
 every stack launch — it is a viewer, and starting a second simulation to look
@@ -1195,4 +1268,6 @@ ros2 bag record /tf /tf_static /scan /odometry/filtered /amcl_pose /mobile_base_
 ```
 
 Bags default to MCAP on Jazzy.
+
+---
 

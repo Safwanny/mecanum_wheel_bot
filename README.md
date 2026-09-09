@@ -1,104 +1,114 @@
-# Mobile Base
+# Mobile Base — an autonomous mecanum robot in ROS 2
 
-Modular ROS 2 Jazzy model and Gazebo simulation for a four-wheel mecanum platform.
+A four-wheel mecanum platform that maps a space, localizes in it, and drives
+itself to a goal while avoiding obstacles — built and verified end to end in
+ROS 2 Jazzy and Gazebo Harmonic.
 
-## Packages
+The interesting problem here is not the navigation stack; that is off-the-shelf
+Nav2. It is everything underneath it: a holonomic drive whose wheel contact has
+to be modelled rather than assumed, a body whose every dimension is derived from
+one measured wheel radius, and a sensor suite chosen to cover a blind spot the
+LiDAR structurally cannot see.
 
-| Package | Responsibility |
+| | |
 | --- | --- |
-| `mobile_base_description` | Xacro model, SI-unit geometry, inertial data, and RViz configuration |
-| `mobile_base_gazebo` | Gazebo Harmonic world and simulator-specific assets |
-| `mobile_base_bringup` | ros2_control configuration and top-level launch files |
-| `mobile_base_localization` | Planar EKF, SLAM Toolbox mapping, Nav2 map serving, and holonomic AMCL |
-| `mobile_base_navigation` | Costmaps, planning, control, behavior tree, command arbitration and e-stop |
-| `mobile_base_tools` | ToF floor classification, odometry-path visualization and repeatable motion checks |
+| **Drive** | 4 × mecanum, holonomic — moves any direction without turning first |
+| **Footprint** | 260 × 168 mm, 99.5 mm tall, 9.5 mm ground clearance |
+| **Mass** | 1.80 kg |
+| **Compute** | ROS 2 Jazzy, Nav2, Gazebo Harmonic |
+| **Sensing** | 360° LiDAR · 8-sensor ToF ring · IMU · camera |
+| **Verification** | 281 automated tests |
+| **Status** | Autonomous navigation working in simulation |
 
-The packages are independent of the existing arm stack.
+---
 
-## Project status
+## The robot
 
-**Status: Phases 1, 2 and 3 are closed. The robot navigates autonomously in
-simulation: set an initial pose, give it a goal, and it drives there avoiding
-obstacles, repeatedly, behind a latching emergency stop.**
-Phase 1 delivered the mecanum simulation and control stack, raw wheel odometry,
-fused wheel/IMU odometry, explicit TF ownership,
-timestamp and TF contract validation.
+### Chassis
 
-The raw and fused odometry campaigns that closed Phase 1 concluded that fusion
-substantially improves yaw accuracy and cross-axis drift, that endpoint position
-performance is broadly similar either way, and that square-path closure improves
-with fusion. **The campaign tooling and its result sets have since been removed
-from the repository**, so those numbers are no longer reproducible here; the
-findings and the calibration decision they justify are kept in
-[`docs/mecanum_motion_accuracy.md`](docs/mecanum_motion_accuracy.md) as a
-historical record.
+Two 3D-printed PLA decks, 10 mm thick, separated by a 40 mm electronics bay. In
+plan the plates form a cross: a central spine with a full-width bumper cap at
+each end and a wing filling the space between each side's wheels, with the four
+bumper corners chamfered at 45°.
 
-The canonical single-cylinder, direction-dependent wheel contact implementation
-has been manually validated through simulation startup, controller operation,
-mecanum motion, odometry/EKF, SLAM mapping, occupancy-map save, saved-map loading,
-and AMCL localization. Phase 2 adds SLAM Toolbox mapping and saved-map AMCL
-localization. Phase 3
-adds the full Nav2 stack: costmaps and a global planner (3a), the command chain
-built but disconnected (3b), and autonomous driving behind arbitration and an
-e-stop (3c). Everything is verified in simulation only; hardware commissioning
-is later work.
+Nothing in that outline is a free parameter. Every bound derives from the wheel
+geometry, so moving a wheel moves the deck with it, and ground clearance is
+`wheel_radius − motor_shaft_offset − deck_thickness` rather than a number
+someone chose. The end caps reach past the wheels deliberately: an impact lands
+on deck, never on a wheel.
 
-### Two motion profiles
+The chamfer cannot be expressed with URDF primitives, so the plate is a
+**generated mesh** — a script emits the STL from the same properties the
+collision boxes are built from, and a test regenerates it and byte-compares.
+Editing the body geometry and forgetting the mesh fails the suite instead of
+shipping a plate that no longer matches itself.
 
-**`primitive` is the default.** The robot turns to face each leg of the path,
-then drives it — one motion at a time, never blending rotation with
-translation. Paths are eight-heading polylines, so straight runs and 45-degree
-diagonals only.
+### Drivetrain
 
-```bash
-ros2 launch mobile_base_navigation planning.launch.py map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+Four TT gearmotors driving mecanum wheels directly, two TB6612FNG drivers, a 2S
+LiPo sitting low and central to keep the centre of mass down, and an ESP32-S3
+at the rear with its USB-C facing aft so it can be flashed without disassembly.
+
+Mecanum wheels are the reason this project is not a differential-drive tutorial.
+Each wheel's rollers sit at 45°, so the contact patch behaves differently along
+and across the roller axis. Modelling that **direction-dependent friction** is
+what makes simulated motion match the real kinematics; treating the wheels as
+isotropic cylinders produces a robot that slides when it should grip.
+
+---
+
+## Sensing: three layers, one blind spot
+
+The sensor suite exists to answer one question the LiDAR alone cannot.
+
+### The 82 mm problem
+
+The LiDAR scan plane sits at **91.5 mm**. Ground clearance is **9.5 mm**.
+Anything between those two heights physically stops the robot and is completely
+invisible to it:
+
+```
+   99.5 mm ─── top of robot
+   91.5 mm ═══ LiDAR scan plane ── the only thing the costmap used to know
+            
+            ▒ 82 mm of obstacles that stop the robot
+            ▒ and do not exist in its world model
+            
+    9.5 mm ─── ground clearance
+       0 mm ▀▀▀ floor
 ```
 
-**`holonomic`** is the original SmacPlanner2D + MPPI stack, which blends
-translation and rotation freely. It is the profile every measurement in this
-README was taken against.
+A shoe. A cable. A door threshold. The wheels stall, and stalled wheels feed
+corrupt odometry into the state estimator — so one shoe can cost the robot its
+localization.
 
-```bash
-ros2 launch mobile_base_navigation planning.launch.py motion_profile:=holonomic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
-```
+### The layers
 
-Both are described in
-[`ARCHITECTURE.md`](ARCHITECTURE.md#motion-profiles). Two things to know before
-relying on either:
+| Layer | Sensor | Range | Job |
+| --- | --- | --- | --- |
+| **Mapping** | 360° planar LiDAR | 4.0 m | SLAM, localization, long-range planning |
+| **Near field** | 8 × VL53L7CX ToF | 0.8 m | The 82 mm blind band, all round |
+| **Attitude** | IMU | — | Yaw fusion for odometry |
+| **Inspection** | RGB camera | — | Human situational awareness |
 
-- **Speeds were doubled** — `primitive` runs 0.20 m/s / 0.60 rad/s, `holonomic`
-  0.30 m/s / 1.20 rad/s. That is 2-4x anything characterised, and the stopping
-  distances recorded below were measured at 0.12 m/s. They no longer describe
-  the current configuration.
-- **Navigation waits for an initial pose.** Nothing activates until you set
-  **2D Pose Estimate** in RViz; a costmap built before then is drawn against a
-  pose you never supplied. Pass `autostart:=true` to skip the wait.
+The **ToF ring** is eight multizone time-of-flight sensors on the lower deck —
+one at the centre of each body face and one on each bumper chamfer. Each reports
+an 8 × 8 grid of ranges over a 60° field. Eight fans at 45° spacing cover the
+full circle with 15° of overlap at every seam, which matters for a holonomic
+base: it can strafe or move diagonally at any moment, so there is no "forward"
+to point a sensor at.
 
-### Camera view
+They sit at 28.5 mm and are aimed partly at the floor on purpose. That is a
+deliberate trade with a hard consequence — see *Findings* below.
 
-The camera has its own window and its own command. Start any stack first, then
-in another terminal:
+---
 
-```bash
-ros2 launch mobile_base_bringup camera_view.launch.py
-```
+## Software stack
 
-It attaches to whatever is already running rather than starting a robot of its
-own. Add `image_topic:=/your/topic` to point it elsewhere, or
-`use_sim_time:=false` on hardware.
+Standard components, chosen deliberately. What follows is the reasoning
+behind each, including where a stock default was wrong for a holonomic base.
 
-
-## Where the rest of the documentation lives
-
-Three documents, split by the question you are asking.
-
-| You want to | Read |
-| --- | --- |
-| Know what this is and why it works the way it does | this file |
-| Run it, drive it, map it, look at a sensor | [docs/GUIDE.md](docs/GUIDE.md) |
-| Know a frame, a topic, a measurement or a derivation | [ARCHITECTURE.md](ARCHITECTURE.md) |
-
-## Algorithms and why each was chosen
+### Why each algorithm was chosen
 
 Every choice below was made against this robot's measurements, not inherited
 from a template. The recurring theme is that Nav2's defaults are written for a
@@ -106,7 +116,7 @@ differential-drive robot several times this size, and several of them fail
 *silently* here — the configuration reads correctly and the robot quietly does
 the wrong thing.
 
-### State estimation
+#### State estimation
 
 | Stage | Algorithm | Why |
 | --- | --- | --- |
@@ -156,7 +166,7 @@ Shrinking the world to 10 x 10 m removed the problem outright: no pose in the
 apartment is now underconstrained. No amount of SLAM tuning fixes an
 unobservable direction — only geometry does.
 
-### Planning
+#### Planning
 
 `nav2_smac_planner::SmacPlanner2D` — an A* variant on the costmap grid, chosen
 for a holonomic base because it does not impose a kinematic model the robot does
@@ -180,7 +190,7 @@ detours 10.59 m instead of 4.48 m. Raising `cost_scaling_factor` makes cost fall
 off *faster*, so the robot plans **closer** to walls; it does not enlarge the
 cleared region.
 
-### Control
+#### Control
 
 `nav2_mppi_controller::MPPIController` — Model Predictive Path Integral. It
 samples a batch of candidate trajectories forward from the current state, scores
@@ -211,7 +221,7 @@ diff-drive defaults that fail silently on a mecanum base:
 `batch_size: 1000` (stock 2000) was measured to hold RTF at 0.999 alongside
 Gazebo.
 
-### Safety
+#### Safety
 
 `twist_mux` is the single arbiter: the only node permitted to publish the
 controller reference. Priorities put teleop (100) above autonomy (10), so a
@@ -239,6 +249,147 @@ tries costmap clearing and waiting before any commanded motion. `spin` is
 enabled on measurement rather than assumption: a full rotation in place changed
 the closest observed obstacle distance by 0.01 m, because this robot's footprint
 is circular and rotating sweeps nothing beyond the radius it already occupies.
+
+
+---
+
+## What is being tested, and how
+
+The project's working assumption is that **a number nobody has measured is a
+guess**. Correctness is established three ways.
+
+### Derivation over declaration
+
+Geometry is computed from measured primitives, not typed in. The deck outline
+comes from the wheel envelopes; the Nav2 footprint radius comes from the deck
+corner; the mass budget holds at 1.80 kg by construction because the deck plates
+absorb the balance, so adding a component cannot silently break the total. Tests
+assert the *relationships*, so a change that violates one fails the build rather
+than drifting quietly.
+
+### 281 automated tests
+
+| Kind | Covers |
+| --- | --- |
+| Description | URDF structure, link placement, collision envelopes, mass budget, generated mesh freshness |
+| Configuration | Nav2 parameters against sensor limits, single-arbiter command chain, frame conventions |
+| Unit | Sensor classification, geometry, odometry accumulation, timestamp contracts |
+| Launch | Gazebo brought up headless, real topic contracts asserted on live messages |
+
+### Measured, not assumed
+
+Sensor behaviour is verified against a running simulator and the numbers are
+recorded. Where a prediction and a measurement disagree, both go in the docs.
+
+---
+
+## Findings
+
+The parts of this project that were not obvious going in.
+
+### Mounting height is a permanent trade
+
+The ToF apertures sit at 28.5 mm. Their downward rows reach the floor within
+435 mm, and past **1.083 m every remaining ray has climbed above the robot's own
+99.5 mm roof**. Nothing beyond that distance could obstruct it. Low mounting
+buys near-field floor visibility and costs far-field low-obstacle range, and no
+amount of software changes it — the ring is a near-field sensor permanently.
+
+### One trigonometric term decided whether it worked
+
+A ray's predicted floor distance moves by `cot(elevation)` for every unit of
+error in the estimated floor plane: **2.0 for the steepest row, 15.3 for the
+shallowest**. Given a uniform threshold, that one shallow row produced 28 false
+obstacles per second on open floor while every other row was clean. Scaling the
+margin by cotangent removed all of them without blunting the steep rows.
+
+### Gravity is the wrong reference for a floor
+
+The obvious way to correct for tilt is an IMU. It is also wrong: on a slope the
+robot and the surface tilt *together*, so in the robot's own frame the floor has
+not moved. Subtracting gravity-referenced pitch would paint every ramp as a
+drop-off. The floor is fitted from the sensors themselves instead — measured
+within 0.2 mm and 0.07° on level ground.
+
+### A rendering backend can corrupt physics data silently
+
+Gazebo's legacy Ogre1 backend does not fail loudly on range sensors. Cloud
+shapes and timestamps stay valid while the ranges are simply wrong — the bottom
+sensor row read 89 mm where geometry demanded 64 mm. Every automated shape check
+passed. Only comparing against predicted geometry caught it.
+
+### Memory scarcity looks like a logic bug
+
+Orphaned Gazebo servers run under the process name `ruby`, so name-based cleanup
+never matched them. Three accumulated at ~640 MB each until the controller
+manager began timing out and launch tests failed for reasons that looked nothing
+like the cause. There is now a tool that matches on full command lines.
+
+### A near-field sensor must not feed a global costmap
+
+The global costmap lives in the map frame and never rolls, so every transient
+mark persists for the entire run. Feeding it a 0.8 m sensor accumulated the
+union of every mark ever made until the robot was enclosed by its own history.
+It marks the local costmap only.
+
+---
+
+## Project status
+
+**Autonomous navigation works in simulation.** Set an initial pose, give it a
+goal, and it drives there avoiding obstacles, repeatedly, behind a latching
+emergency stop.
+
+| Phase | Delivered |
+| --- | --- |
+| **1** | Mecanum simulation and control, wheel odometry, IMU fusion, TF ownership, timestamp contracts |
+| **2** | SLAM Toolbox mapping, map serving, AMCL localization |
+| **3** | Nav2 costmaps, global planning, command arbitration, e-stop, autonomous driving |
+| **4** | ToF perimeter: eight-sensor ring, floor/obstacle classification, local costmap integration |
+
+Two motion profiles are available: `primitive` turns to face each leg before
+driving it, and `holonomic` blends translation and rotation freely. Details in
+[ARCHITECTURE.md](ARCHITECTURE.md#motion-profiles).
+
+### Verified in simulation only
+
+Everything above is simulated. No hardware has been commissioned, and the gap is
+not merely untested — it is known to be unfavourable. Gazebo returns a perfect
+reflection from every surface, while a real time-of-flight sensor on dark carpet
+at a shallow angle returns nothing at all. The ToF results in particular are an
+upper bound.
+
+## Goals
+
+- **Near term** — commission the ToF ring on hardware, per-sensor diagnostics,
+  a calibration procedure, and an MCU-side reflex stop independent of the ROS
+  graph.
+- **Then** — temporal accumulation so obstacles are remembered while in the
+  blind spot, and wall-relative alignment for docking, which multizone sensors
+  support well and a holonomic base can act on directly.
+- **Not pursued** — cliff detection from this geometry. It was built, measured
+  and removed; the reasoning is in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## Documentation
+
+| You want to | Read |
+| --- | --- |
+| Understand the project | this file |
+| Run, drive, map or inspect it | [docs/GUIDE.md](docs/GUIDE.md) |
+| Look up a frame, topic, measurement or derivation | [ARCHITECTURE.md](ARCHITECTURE.md) |
+
+## Packages
+
+| Package | Responsibility |
+| --- | --- |
+| `mobile_base_description` | Xacro model, SI geometry, inertials, RViz configuration |
+| `mobile_base_gazebo` | Gazebo Harmonic worlds |
+| `mobile_base_bringup` | ros2_control configuration and top-level launch |
+| `mobile_base_localization` | EKF, SLAM Toolbox, map serving, AMCL |
+| `mobile_base_navigation` | Costmaps, planning, control, behavior tree, arbitration, e-stop |
+| `mobile_base_tools` | ToF classification, visualization, motion checks, cleanup |
 
 ## Continuous integration
 
