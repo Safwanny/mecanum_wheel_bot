@@ -30,6 +30,19 @@ NORTH_GAP = 0.925
 # Simulated planar LiDAR maximum range.
 LIDAR_MAX_RANGE = 4.0
 
+# The ToF ring's own ceiling, and it is geometric rather than optical. The
+# apertures sit 28.5 mm up and the downward rows all terminate on the floor by
+# 435 mm, so beyond 1.083 m the lowest ray still in flight has climbed past the
+# robot's own 99.5 mm roof. Nothing marked further out could obstruct it, and
+# the LiDAR already resolves that range 15x finer.
+TOF_MAX_RANGE = 1.083
+TOF_SOURCES = ('tof_obstacles', 'tof_cliffs')
+
+# Fastest the robot may travel and still stop on a cliff seen by the second
+# floor row, which lands 143.5 mm ahead: 0.1 s of latency plus v^2/2a at
+# 1.0 m/s^2 must fit inside that. The first row, at 84.1 mm, gives 0.32 m/s.
+CLIFF_SAFE_LINEAR = 0.44
+
 # The chain is connected, so the safety property is no longer "nobody names
 # this topic" but the single-arbiter invariant: exactly one node publishes to
 # the controller's reference interface, and it is the mux.
@@ -54,6 +67,9 @@ ENVELOPE_MULTIPLE = 5.0
 # The robot is 0.216 m long; a goal tolerance larger than that would count the
 # goal as reached with the robot a body-length away.
 ROBOT_LENGTH = 0.216
+
+# Top of the upper deck. Anything above it is clearance the robot drives under.
+ROBOT_HEIGHT = 0.0995
 
 # Measured worst-case stopping distance: the deadman path, e-stop
 # engaged at 0.121 m/s, wheels at zero after 0.909 s, 0.12 m travelled.
@@ -186,15 +202,38 @@ def main():
     assert global_costmap['resolution'] == 0.05
     assert local_costmap['resolution'] == 0.05
 
-    # Sensor ranges stay inside the LiDAR's own maximum, and raytracing
+    # Sensor ranges stay inside each sensor's own maximum, and raytracing
     # reaches slightly past marking so free space clears properly.
     for costmap in (global_costmap, local_costmap):
-        scan = costmap['obstacle_layer']['scan']
+        layer = costmap['obstacle_layer']
+        # Space separated, not a YAML list. collision_monitor.yaml uses a list
+        # for the same key and the two forms are not interchangeable.
+        sources = layer['observation_sources'].split()
+        assert sources == ['scan'] + list(TOF_SOURCES)
+        for name in sources:
+            source = layer[name]
+            assert source['raytrace_max_range'] > source['obstacle_max_range']
+            assert source['obstacle_min_range'] == 0.0
+
+        scan = layer['scan']
         assert scan['topic'] == '/scan'
         assert scan['data_type'] == 'LaserScan'
         assert scan['obstacle_max_range'] < LIDAR_MAX_RANGE
         assert scan['raytrace_max_range'] < LIDAR_MAX_RANGE
-        assert scan['raytrace_max_range'] > scan['obstacle_max_range']
+
+        # The ToF sources carry pre-classified points: the floor is filtered
+        # out upstream, so these must never be asked to do it with a height
+        # cut, and they must stay inside the geometric ceiling.
+        for name in TOF_SOURCES:
+            source = layer[name]
+            assert source['topic'] == f'/{name.replace("_", "/", 1)}'
+            assert source['data_type'] == 'PointCloud2'
+            assert source['marking'] is True
+            assert source['obstacle_max_range'] < TOF_MAX_RANGE
+            assert source['raytrace_max_range'] < TOF_MAX_RANGE
+            # Above the robot's roof is clearance, not obstacle.
+            assert source['max_obstacle_height'] > ROBOT_HEIGHT
+            assert source['max_obstacle_height'] < 2.0 * ROBOT_HEIGHT
 
     # Frames. Nav2 defaults robot_base_frame to base_link, which this repo
     # does not use for the odometry chain; the local costmap rolls in odom.
@@ -291,6 +330,10 @@ def main():
     assert follow_path['vx_max'] <= VALIDATED_LINEAR * ENVELOPE_MULTIPLE
     assert follow_path['vy_max'] <= VALIDATED_LINEAR * ENVELOPE_MULTIPLE
     assert follow_path['wz_max'] <= VALIDATED_ANGULAR * ENVELOPE_MULTIPLE
+
+    # Fast enough to outrun the cliff detection and the ring is decoration.
+    assert follow_path['vx_max'] <= CLIFF_SAFE_LINEAR
+    assert follow_path['vy_max'] <= CLIFF_SAFE_LINEAR
 
     # PreferForwardCritic penalises the lateral and reverse motion a mecanum
     # base exists to use.
