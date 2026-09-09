@@ -1,0 +1,430 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="proving_ground">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.85 0.85 0.85 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><ambient>0.18 0.18 0.20 1</ambient><diffuse>0.28 0.28 0.31 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      A raised deck the robot drives on, so every deck edge is a real drop.
+      The ground_plane is an infinite collision plane and nothing falls through
+      it, so a cliff has to be built as an absence of deck rather than as a
+      hole in the ground.
+
+      Deck top 0.12 m. SPAWN AT z:=0.22 - the launch default of 0.10 puts the
+      robot on the floor beside the deck instead of on it.
+
+          west                                              east
+        +=================================================+
+        |  bars 15/30/45/60/90 mm    |  gaps .45/.38/.32   |
+        |                            |              +=====+   notch: the
+        |  ramp >  [ deck ]     doorsill    overhang | lane |   cliff wraps
+        |                            |              +=====+   an inside
+        |  mezzanine 60 mm           |  thin pole          |   corner
+        +=================================================+
+
+      Note the box borders use '=' rather than '-'. A double hyphen cannot
+      appear inside an XML comment, and this file is re-parsed with
+      ElementTree at every launch.
+
+      Several features are here to FAIL to trigger. The 15 mm bar is below
+      what can be separated from the floor and the overhang is clearance the
+      robot drives under; if either shows up in the costmap, the thresholds
+      are producing false positives.
+    -->
+
+    <model name="deck_main">
+      <static>true</static><pose>-0.6000 0.0000 0.0600 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>6.8000 6.0000 0.1200</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6.8000 6.0000 0.1200</size></box></geometry>
+          <material><ambient>0.32 0.30 0.26 1</ambient><diffuse>0.55 0.52 0.46 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="deck_east_south">
+      <static>true</static><pose>3.4000 -1.2000 0.0600 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.2000 3.6000 0.1200</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.2000 3.6000 0.1200</size></box></geometry>
+          <material><ambient>0.32 0.30 0.26 1</ambient><diffuse>0.55 0.52 0.46 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="deck_east_north">
+      <static>true</static><pose>3.4000 2.4500 0.0600 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.2000 1.1000 0.1200</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.2000 1.1000 0.1200</size></box></geometry>
+          <material><ambient>0.32 0.30 0.26 1</ambient><diffuse>0.55 0.52 0.46 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="ledge_lane_wall">
+      <static>true</static><pose>1.6000 1.2000 0.4200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1500 2.4000 0.6000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1500 2.4000 0.6000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="ramp_to_deck">
+      <static>true</static><pose>-4.3600 0.0000 0.0600 0.000000 -0.165149 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.7299 1.2000 0.0200</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.7299 1.2000 0.0200</size></box></geometry>
+          <material><ambient>0.45 0.30 0.12 1</ambient><diffuse>0.75 0.52 0.22 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="bar_15mm">
+      <static>true</static><pose>-3.2000 1.8000 0.1275 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 1.6000 0.0150</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 1.6000 0.0150</size></box></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="bar_30mm">
+      <static>true</static><pose>-2.3500 1.8000 0.1350 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 1.6000 0.0300</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 1.6000 0.0300</size></box></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="bar_45mm">
+      <static>true</static><pose>-1.5000 1.8000 0.1425 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 1.6000 0.0450</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 1.6000 0.0450</size></box></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="bar_60mm">
+      <static>true</static><pose>-0.6500 1.8000 0.1500 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 1.6000 0.0600</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 1.6000 0.0600</size></box></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="bar_90mm">
+      <static>true</static><pose>0.2000 1.8000 0.1650 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 1.6000 0.0900</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 1.6000 0.0900</size></box></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="doorway_left">
+      <static>true</static><pose>-1.2000 1.0500 0.4200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1200 0.9000 0.6000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1200 0.9000 0.6000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="doorway_right">
+      <static>true</static><pose>-1.2000 -1.0500 0.4200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1200 0.9000 0.6000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1200 0.9000 0.6000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="doorsill">
+      <static>true</static><pose>-1.2000 0.0000 0.1400 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1200 1.2000 0.0400</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1200 1.2000 0.0400</size></box></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="thin_pole">
+      <static>true</static><pose>0.4000 -1.9000 0.3700 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.0150</radius><length>0.5000</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.0150</radius><length>0.5000</length></cylinder></geometry>
+          <material><ambient>0.62 0.18 0.16 1</ambient><diffuse>0.90 0.30 0.26 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="overhang_top">
+      <static>true</static><pose>1.6000 0.9000 0.4350 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.0000 1.4000 0.0300</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.0000 1.4000 0.0300</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="overhang_leg_s">
+      <static>true</static><pose>1.6000 0.2400 0.2700 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 0.0600 0.3000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 0.0600 0.3000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="overhang_leg_n">
+      <static>true</static><pose>1.6000 1.5600 0.2700 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.0600 0.0600 0.3000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0600 0.0600 0.3000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="gap_45_b">
+      <static>true</static><pose>-0.2000 -0.5250 0.3200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="gap_45_a">
+      <static>true</static><pose>-0.2000 0.5250 0.3200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="gap_38_b">
+      <static>true</static><pose>0.9000 -0.4900 0.3200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="gap_38_a">
+      <static>true</static><pose>0.9000 0.4900 0.3200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="gap_32_b">
+      <static>true</static><pose>2.0000 -0.4600 0.3200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="gap_32_a">
+      <static>true</static><pose>2.0000 0.4600 0.3200 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2000 0.6000 0.4000</size></box></geometry>
+          <material><ambient>0.30 0.40 0.62 1</ambient><diffuse>0.50 0.62 0.88 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="mezzanine">
+      <static>true</static><pose>-3.2000 -2.1000 0.1500 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.6000 1.4000 0.0600</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.6000 1.4000 0.0600</size></box></geometry>
+          <material><ambient>0.45 0.30 0.12 1</ambient><diffuse>0.75 0.52 0.22 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_north">
+      <static>true</static><pose>0.0000 4.6000 0.6000 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>11.0000 0.1500 1.2000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>11.0000 0.1500 1.2000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_south">
+      <static>true</static><pose>0.0000 -4.6000 0.6000 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>11.0000 0.1500 1.2000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>11.0000 0.1500 1.2000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_east">
+      <static>true</static><pose>5.4000 0.0000 0.6000 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1500 9.3500 1.2000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1500 9.3500 1.2000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_west">
+      <static>true</static><pose>-5.4000 0.0000 0.6000 0.000000 0.000000 0.000000</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1500 9.3500 1.2000</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1500 9.3500 1.2000</size></box></geometry>
+          <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
+            <specular>0.2 0.2 0.25 1</specular></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

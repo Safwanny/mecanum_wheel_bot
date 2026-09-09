@@ -31,6 +31,7 @@ REQUIRED_SYSTEMS = {
 EXPECTED_WORLDS = {
     'navigation_basic.sdf',
     'my_world.sdf',
+    'proving_ground.sdf',
 }
 
 
