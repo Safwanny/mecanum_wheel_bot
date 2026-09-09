@@ -188,8 +188,9 @@ The camera is mounted on the front face of the upper deck, centred on the
 plate's thickness. The LiDAR is a square dark base carrying a cylindrical
 rotating head, and its collision is one box bounding both.
 
-Four VL53L7CX Time-of-Flight sensors stand on the lower deck, one at the centre
-of each body face, on the Pololu #3418 carrier at its quoted 13 x 18 x 3 mm.
+Eight VL53L7CX Time-of-Flight sensors stand on the lower deck, on the Pololu
+#3418 carrier at its quoted 13 x 18 x 3 mm - one at the centre of each body
+face, and one on each of the four bumper chamfers.
 Each link origin is the optical aperture rather than the centre of the board,
 the same convention `lidar_link` follows: the aperture is where rays leave, so
 it is what every consumer needs. The board hangs inboard behind it, standing
@@ -206,11 +207,24 @@ a positive outward component and grazes past the wheel. Recessing the aperture
 even a board thickness inboard puts the outer zones of the fan into the wheel
 instead, which is why the sensor test asserts that position as an equality.
 
-Four sensors on the cardinal axes cover 240 degrees of 360, leaving 30 degree
-wedges on the diagonals - which is where a mecanum base travels when it strafes
-at 45 degrees. Those wedges are why four more sensors belong on the chamfered
-corners; the description macro already takes an arbitrary yaw, so adding them is
-four more calls.
+The four cardinal sensors alone would cover 240 degrees of 360 and leave 30
+degree wedges on the diagonals - which is exactly where a mecanum base travels
+when it strafes at 45 degrees. The four corner sensors close those wedges. Eight
+fans of 60 degrees spaced 45 degrees apart cover the full circle with 15 degrees
+of overlap at every seam, verified in simulation against the published
+transforms rather than assumed from the nominal geometry.
+
+The corners sit at the midpoint of the 45 degree bumper chamfer, whose outward
+normal is the diagonal itself, so each looks along a strafe direction and sits
+on the part of the body that reaches an obstacle first in that motion. The
+chamfer is a visual-mesh feature - the deck collision boxes keep square corners
+and over-claim those triangles - which costs nothing here because `gpu_lidar`
+renders the visual scene rather than the collision geometry, so the surface
+these apertures sit on is the surface Gazebo traces against.
+
+The 15 degree overlaps mean adjacent fans illuminate the same volume. In
+simulation that is free; on hardware the eight 940 nm emitters would need
+ranging in alternating banks to keep them from reading each other.
 
 Ground clearance is therefore not a free parameter: it is
 `wheel_radius - motor_shaft_offset - lower_deck_thickness`, and a thicker lower
@@ -279,8 +293,8 @@ power components.
 | Two TB6612FNG drivers | 0.006 kg |
 | ESP32-S3 devkit | 0.012 kg |
 | LiDAR, IMU, camera | 0.190 kg |
-| Four VL53L7CX carriers | 0.002 kg |
-| Two deck plates, the balance | 1.221 kg |
+| Eight VL53L7CX carriers | 0.004 kg |
+| Two deck plates, the balance | 1.218 kg |
 | **`total_body_mass`** | **1.800 kg** |
 
 The wheels hang off revolute joints, so they are not lumped and are not counted
@@ -842,6 +856,10 @@ map ──(AMCL)──> odom ──(EKF)──> base_footprint ──> base_link
                                                      ├──> tof_rear_link
                                                      ├──> tof_left_link
                                                      ├──> tof_right_link
+                                                     ├──> tof_front_left_link
+                                                     ├──> tof_front_right_link
+                                                     ├──> tof_rear_left_link
+                                                     ├──> tof_rear_right_link
                                                      ├──> front_left_wheel_link
                                                      ├──> front_right_wheel_link
                                                      ├──> rear_right_wheel_link
@@ -999,6 +1017,13 @@ implementation.
   89 mm where geometry demands 64 mm, and the top row pinned to the near limit
   against nothing at all. Under Ogre2 every row lands within a millimetre of
   prediction. Any range read off an Ogre1 run is not evidence.
+- ToF visualisation is timing-sensitive in RViz. The clouds are produced by
+  Gazebo and the `odom` transform by the EKF behind it, so 89 percent of clouds
+  arrive stamped ahead of the newest transform, by 9.5 ms on average. RViz drops
+  what it cannot transform at the stamp, so a cloud display with zero decay time
+  blinks. The ray markers publish with a zero stamp, which asks for the latest
+  transform instead, and the cloud displays carry a 0.2 s decay time to cover
+  the dropped frames the way the LiDAR's 0.25 s already does.
 - The optional velocity smoother remains disabled pending validation of stale
   command behavior.
 - Gazebo runtime tests need isolated ROS domains/partitions and serial cleanup.

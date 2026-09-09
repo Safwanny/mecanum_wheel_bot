@@ -40,7 +40,8 @@ from sensor_msgs.msg import Image, Imu, LaserScan, PointCloud2
 from tf2_msgs.msg import TFMessage
 
 
-TOF_FACES = ('front', 'rear', 'left', 'right')
+TOF_FACES = ('front', 'rear', 'left', 'right',
+             'front_left', 'front_right', 'rear_left', 'rear_right')
 TOF_ZONES = 8
 
 

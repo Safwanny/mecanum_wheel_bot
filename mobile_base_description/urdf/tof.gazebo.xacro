@@ -55,5 +55,9 @@
     <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="rear"/>
     <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="left"/>
     <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="right"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="front_left"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="front_right"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="rear_left"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="rear_right"/>
   </xacro:macro>
 </robot>

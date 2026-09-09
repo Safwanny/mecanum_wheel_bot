@@ -335,6 +335,24 @@
        outer zones of the fan into the wheel instead. -->
   <xacro:property name="tof_front_x" value="${chassis_length / 2.0}"/>
   <xacro:property name="tof_side_y" value="${wheel_outer_y}"/>
+  <!-- The corner sensors sit on the 45 degree bumper chamfer, whose face runs
+       from the cap's inner corner out to the narrowed bumper edge. Its
+       midpoint is the mounting point and its outward normal is the 45 degree
+       diagonal, so these look exactly along the direction a mecanum base
+       travels when it strafes at 45 degrees - the cheapest motion it has, and
+       the one the cardinal four cannot see.
+
+       The chamfer is a visual-mesh feature: the deck collision boxes keep
+       square corners and over-claim these triangles. That costs nothing here
+       because gpu_lidar renders the visual scene rather than the collision
+       geometry, so the surface these apertures sit on is the surface Gazebo
+       traces against. -->
+  <xacro:property name="tof_nose_half_width"
+                  value="${wheel_outer_y - cap_length}"/>
+  <xacro:property name="tof_corner_x"
+                  value="${(cap_inner_x + chassis_length / 2.0) / 2.0}"/>
+  <xacro:property name="tof_corner_y"
+                  value="${(wheel_outer_y + tof_nose_half_width) / 2.0}"/>
   <!-- Standing on the lower deck top face, so the aperture is half a board up
        from it. The board top clears the upper deck underside by 22 mm. -->
   <xacro:property name="tof_z"
@@ -382,7 +400,7 @@
                   value="${battery_mass + 4.0 * motor_mass
                            + 2.0 * driver_mass + mcu_mass
                            + lidar_mass + imu_mass + camera_mass
-                           + 4.0 * tof_mass}"/>
+                           + 8.0 * tof_mass}"/>
   <xacro:property name="deck_mass"
                   value="${(total_body_mass - component_mass) / 2.0}"/>
 </robot>

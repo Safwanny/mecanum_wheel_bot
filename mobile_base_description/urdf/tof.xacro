@@ -15,11 +15,12 @@
        guess.
 
        The component macros in macros/components.xacro cannot serve here. Both
-       pin rpy to zero on the joint, and three of these four sensors are turned
-       to face their own wall. -->
+       pin rpy to zero on the joint, and seven of these eight sensors are
+       turned to face their own wall. -->
   <xacro:macro name="mobile_base_tof" params="prefix name x y z yaw">
     <link name="${prefix}tof_${name}_link">
       <!-- The populated PCB, set back behind the module that stands on it. -->
+
       <visual>
         <origin
           xyz="${-tof_module_height - tof_pcb_thickness / 2.0} 0 0"
@@ -70,11 +71,13 @@
        point of the robot, which is the only side position whose fan clears the
        wheels - see the placement note in properties.xacro.
 
-       Four sensors on the cardinal axes leave 30 degree wedges on the
-       diagonals, which is where a mecanum base moves when it strafes at 45
-       degrees. Those wedges are the reason four more sensors belong on the
-       chamfered corners later; the macro above already takes an arbitrary yaw,
-       so adding them is four more calls and four more property pairs. -->
+       The four corners sit on the 45 degree bumper chamfer, looking along
+       the diagonals. Those are the directions the cardinal four cannot see,
+       and the directions a mecanum base travels when it strafes at 45
+       degrees, so they close the ring: eight fans of 60 degrees spaced 45
+       degrees apart cover the full 360 with 15 degrees of overlap at every
+       seam, and the corner apertures also sit on the part of the body that
+       reaches an obstacle first in diagonal motion. -->
   <xacro:macro name="mobile_base_tof_array" params="prefix">
     <xacro:mobile_base_tof prefix="${prefix}" name="front"
                            x="${tof_front_x}" y="0" z="${tof_z}" yaw="0"/>
@@ -87,5 +90,17 @@
     <xacro:mobile_base_tof prefix="${prefix}" name="right"
                            x="0" y="${-tof_side_y}" z="${tof_z}"
                            yaw="${-pi / 2.0}"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="front_left"
+                           x="${tof_corner_x}" y="${tof_corner_y}"
+                           z="${tof_z}" yaw="${pi / 4.0}"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="front_right"
+                           x="${tof_corner_x}" y="${-tof_corner_y}"
+                           z="${tof_z}" yaw="${-pi / 4.0}"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="rear_left"
+                           x="${-tof_corner_x}" y="${tof_corner_y}"
+                           z="${tof_z}" yaw="${3.0 * pi / 4.0}"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="rear_right"
+                           x="${-tof_corner_x}" y="${-tof_corner_y}"
+                           z="${tof_z}" yaw="${-3.0 * pi / 4.0}"/>
   </xacro:macro>
 </robot>

@@ -586,6 +586,14 @@ def generate_launch_description():
                     '[gz.msgs.PointCloudPacked',
                     '/tof/right/points@sensor_msgs/msg/PointCloud2'
                     '[gz.msgs.PointCloudPacked',
+                    '/tof/front_left/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
+                    '/tof/front_right/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
+                    '/tof/rear_left/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
+                    '/tof/rear_right/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
                 ],
                 parameters=[
                     {

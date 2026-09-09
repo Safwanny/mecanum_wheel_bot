@@ -32,7 +32,8 @@ WHEEL_JOINTS = {
     'rear_left_wheel_joint',
 }
 
-TOF_FACES = ('front', 'rear', 'left', 'right')
+TOF_FACES = ('front', 'rear', 'left', 'right',
+             'front_left', 'front_right', 'rear_left', 'rear_right')
 
 
 def generated_robot(xacro_path, use_gazebo):
@@ -106,11 +107,7 @@ def main():
         'imu_link',
         'camera_link',
         'camera_optical_frame',
-        'tof_front_link',
-        'tof_rear_link',
-        'tof_left_link',
-        'tof_right_link',
-    ):
+    ) + tuple(f'tof_{face}_link' for face in TOF_FACES):
         assert required in link_names
     assert WHEEL_JOINTS <= joint_names
     assert not [name for name in link_names if '_roller_' in name]
@@ -455,12 +452,24 @@ def main():
     TOF_BOARD_WIDTH = 0.013
     TOF_BOARD_LENGTH = 0.018
     TOF_MODULE_HEIGHT = 0.00175
+    # The corners sit on the 45 degree bumper chamfer, at its midpoint. The
+    # chamfer runs from the cap's inner corner out to the narrowed bumper
+    # edge, eating one cap_length of width over the cap's own depth.
+    CAP_INNER_X = 0.10974443
+    CAP_LENGTH = CHASSIS_LENGTH / 2.0 - CAP_INNER_X
+    CORNER_X = (CAP_INNER_X + CHASSIS_LENGTH / 2.0) / 2.0
+    CORNER_Y = (OVERALL_WIDTH / 2.0 + (OVERALL_WIDTH / 2.0 - CAP_LENGTH)) / 2.0
     tof_expected = {
         'front': (CHASSIS_LENGTH / 2.0, 0.0, 0.0),
         'rear': (-CHASSIS_LENGTH / 2.0, 0.0, math.pi),
         'left': (0.0, OVERALL_WIDTH / 2.0, math.pi / 2.0),
         'right': (0.0, -OVERALL_WIDTH / 2.0, -math.pi / 2.0),
+        'front_left': (CORNER_X, CORNER_Y, math.pi / 4.0),
+        'front_right': (CORNER_X, -CORNER_Y, -math.pi / 4.0),
+        'rear_left': (-CORNER_X, CORNER_Y, 3.0 * math.pi / 4.0),
+        'rear_right': (-CORNER_X, -CORNER_Y, -3.0 * math.pi / 4.0),
     }
+    assert set(tof_expected) == set(TOF_FACES)
     for face, (want_x, want_y, want_yaw) in tof_expected.items():
         tof_link = link_by_name[f'tof_{face}_link']
         tof_joint = joint_by_name[f'base_link_to_tof_{face}_link_joint']
@@ -474,6 +483,11 @@ def main():
         # outward component and grazes past the wheel. Recess the aperture
         # inboard and the outer zones of the fan cut into the wheel instead,
         # which is why this is an equality and not a bound.
+        #
+        # The corners are pinned for the same reason in a different geometry:
+        # they must land on the chamfer face, not inside the square collision
+        # corner that over-claims it, so that gpu_lidar traces from the
+        # surface it actually renders.
         assert math.isclose(got_x, want_x, abs_tol=1e-9), face
         assert math.isclose(got_y, want_y, abs_tol=1e-9), face
         assert math.isclose(got_yaw, want_yaw, abs_tol=1e-9), face
@@ -526,8 +540,8 @@ def main():
         joint.find('parent').attrib['link']
         for joint in joints
     }
-    for sensor_frame in ('lidar_link', 'imu_link', 'tof_front_link',
-                         'tof_rear_link', 'tof_left_link', 'tof_right_link'):
+    for sensor_frame in ('lidar_link', 'imu_link') + tuple(
+            f'tof_{face}_link' for face in TOF_FACES):
         current = sensor_frame
         visited = set()
         while current != 'base_link':
