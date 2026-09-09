@@ -21,6 +21,53 @@ timestamp_contracts:
     maximum_age_sec: 0.20
     required_in: [raw, fused]
 
+  # The four ToF sensors run at the VL53L7CX's 8x8 frame rate. They are a
+  # near-field layer only: nothing downstream fuses them yet, so they are
+  # required in raw and nowhere else.
+  tof_front:
+    topic: /tof/front/points
+    type: sensor_msgs/msg/PointCloud2
+    expected_rate_hz: 15.0
+    minimum_rate_hz: 12.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.17
+    maximum_age_sec: 0.20
+    required_in: [raw]
+
+  tof_rear:
+    topic: /tof/rear/points
+    type: sensor_msgs/msg/PointCloud2
+    expected_rate_hz: 15.0
+    minimum_rate_hz: 12.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.17
+    maximum_age_sec: 0.20
+    required_in: [raw]
+
+  tof_left:
+    topic: /tof/left/points
+    type: sensor_msgs/msg/PointCloud2
+    expected_rate_hz: 15.0
+    minimum_rate_hz: 12.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.17
+    maximum_age_sec: 0.20
+    required_in: [raw]
+
+  tof_right:
+    topic: /tof/right/points
+    type: sensor_msgs/msg/PointCloud2
+    expected_rate_hz: 15.0
+    minimum_rate_hz: 12.0
+    minimum_sample_count: 5
+    allow_duplicate_timestamps: false
+    maximum_gap_sec: 0.17
+    maximum_age_sec: 0.20
+    required_in: [raw]
+
   raw_odometry:
     topic: /mobile_base_controller/odometry
     type: nav_msgs/msg/Odometry

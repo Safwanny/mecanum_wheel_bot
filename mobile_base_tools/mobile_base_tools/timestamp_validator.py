@@ -13,13 +13,14 @@ from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Imu, LaserScan
+from sensor_msgs.msg import Imu, LaserScan, PointCloud2
 import yaml
 
 
 TOPIC_TYPES = {
     'sensor_msgs/msg/Imu': (Imu, qos_profile_sensor_data),
     'sensor_msgs/msg/LaserScan': (LaserScan, qos_profile_sensor_data),
+    'sensor_msgs/msg/PointCloud2': (PointCloud2, qos_profile_sensor_data),
     'nav_msgs/msg/Odometry': (Odometry, 10),
 }
 
@@ -203,6 +204,15 @@ def _numeric_values(message):
         return (
             message.angle_min, message.angle_max, message.angle_increment,
             message.range_min, message.range_max,
+        )
+    if isinstance(message, PointCloud2):
+        # Only the cloud layout is checked. The payload of a ToF cloud is
+        # expected to carry non-finite values - those are the zones that saw
+        # nothing, which is exactly what a drop-off looks like - so running a
+        # finiteness check over the points would fail on correct data.
+        return (
+            float(message.height), float(message.width),
+            float(message.point_step), float(message.row_step),
         )
     if isinstance(message, Imu):
         return (
