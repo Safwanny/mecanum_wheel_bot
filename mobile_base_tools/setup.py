@@ -31,5 +31,6 @@ setup(
         'tof_ray_markers = mobile_base_tools.tof_ray_markers:main',
         'tof_floor_classifier = mobile_base_tools.tof_floor_classifier:main',
         'tf_validator = mobile_base_tools.tf_validator:main',
+        'stop_simulation = mobile_base_tools.stop_simulation:main',
     ]},
 )

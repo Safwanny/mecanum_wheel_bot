@@ -922,6 +922,45 @@ Check forward, reverse, both strafes, both rotations, and all four diagonal
 combinations. Confirm the corresponding Gazebo pose changes, the driven-wheel sign
 pattern, and passive roller velocity in `/joint_states`.
 
+## Stopping the simulation cleanly
+
+Run this after every session, and any time the machine feels slow:
+
+```bash
+ros2 run mobile_base_tools stop_simulation
+```
+
+Add `--dry-run` to see what it would kill without killing it.
+
+**Do not try to do this with `pkill` on a name.** Three separate traps make that
+unreliable, and each one has cost real debugging time here:
+
+- The Gazebo server's process name is **`ruby`**. Only its command line says
+  `gz sim`, so `pkill gz` never matches it. Three of these once accumulated at
+  ~640 MB each and quietly starved the controller manager until launch tests
+  began failing with no obvious cause.
+- `robot_state_publisher` is started with a generated parameter file, so its
+  command line contains **no package name at all** - only
+  `/tmp/launch_params_<random>`. No package-shaped pattern will find it.
+- Gazebo does not always honour SIGINT. The launch logs say so outright:
+  *"failed to terminate 5 seconds after receiving SIGINT"*.
+
+A launch started with `setsid` or `nohup` also outlives the terminal that
+started it, so closing the window leaves the whole stack running.
+
+Leftovers are not harmless. They hold memory, and once memory is tight the
+controller manager times out waiting for `robot_description` and the launch
+tests fail for reasons that look nothing like the actual cause.
+
+### Running the full test suite
+
+On this machine, use a sequential executor. In parallel the Gazebo launch test
+competes for memory with the other packages and fails spuriously:
+
+```bash
+colcon test --executor sequential && colcon test-result --verbose
+```
+
 ## The ToF perimeter and the proving ground
 
 Eight VL53L7CX sensors ring the lower deck, each reporting an 8x8 grid of zones
