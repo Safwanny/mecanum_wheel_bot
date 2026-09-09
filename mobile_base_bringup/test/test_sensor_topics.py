@@ -36,8 +36,12 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image, Imu, LaserScan
+from sensor_msgs.msg import Image, Imu, LaserScan, PointCloud2
 from tf2_msgs.msg import TFMessage
+
+
+TOF_FACES = ('front', 'rear', 'left', 'right')
+TOF_ZONES = 8
 
 
 def generate_test_description():
@@ -79,6 +83,8 @@ class TestSensorTopics(unittest.TestCase):
         received = {
             'scan': None, 'imu': None, 'camera': None, 'filtered': None,
         }
+        for face in TOF_FACES:
+            received[f'tof_{face}'] = None
         odom_tf_received = False
 
         def tf_callback(message):
@@ -116,6 +122,16 @@ class TestSensorTopics(unittest.TestCase):
                 10,
             ),
             self.node.create_subscription(TFMessage, '/tf', tf_callback, 10),
+        ]
+        subscriptions += [
+            self.node.create_subscription(
+                PointCloud2,
+                f'/tof/{face}/points',
+                lambda message, key=f'tof_{face}':
+                    received.__setitem__(key, message),
+                qos_profile_sensor_data,
+            )
+            for face in TOF_FACES
         ]
         deadline = time.monotonic() + 90.0
         while time.monotonic() < deadline and (
@@ -159,6 +175,25 @@ class TestSensorTopics(unittest.TestCase):
         self.assertTrue(finite_ranges)
         self.assertTrue(all(scan.range_min <= value <= scan.range_max
                             for value in finite_ranges))
+
+        # The four ToF sensors each scan an 8 x 8 zone grid, so Gazebo should
+        # hand back an organised cloud: 64 points in grid order with the zones
+        # that saw nothing left non-finite. That layout is what lets the ray
+        # markers draw a segment for every zone rather than only for the ones
+        # that returned, so it is asserted rather than assumed - if Gazebo ever
+        # delivers a cloud filtered down to hits, this is where it surfaces.
+        for face in TOF_FACES:
+            cloud = received[f'tof_{face}']
+            self.assertIsNotNone(
+                cloud, f'no /tof/{face}/points message received')
+            self.assertEqual(cloud.header.frame_id, f'tof_{face}_link')
+            self.assertGreater(
+                cloud.header.stamp.sec + cloud.header.stamp.nanosec, 0)
+            self.assertEqual(
+                cloud.height * cloud.width, TOF_ZONES * TOF_ZONES,
+                f'/tof/{face}/points is not an organised '
+                f'{TOF_ZONES}x{TOF_ZONES} grid: '
+                f'height={cloud.height} width={cloud.width}')
 
         imu = received['imu']
         self.assertEqual(imu.header.frame_id, 'imu_link')

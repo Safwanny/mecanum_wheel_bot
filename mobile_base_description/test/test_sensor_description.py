@@ -32,6 +32,8 @@ WHEEL_JOINTS = {
     'rear_left_wheel_joint',
 }
 
+TOF_FACES = ('front', 'rear', 'left', 'right')
+
 
 def generated_robot(xacro_path, use_gazebo):
     text = subprocess.run(
@@ -104,6 +106,10 @@ def main():
         'imu_link',
         'camera_link',
         'camera_optical_frame',
+        'tof_front_link',
+        'tof_rear_link',
+        'tof_left_link',
+        'tof_right_link',
     ):
         assert required in link_names
     assert WHEEL_JOINTS <= joint_names
@@ -114,6 +120,8 @@ def main():
     assert_fixed_child(joints, 'imu_link', 'base_link')
     assert_fixed_child(joints, 'camera_link', 'base_link')
     assert_fixed_child(joints, 'camera_optical_frame', 'camera_link')
+    for face in TOF_FACES:
+        assert_fixed_child(joints, f'tof_{face}_link', 'base_link')
 
     link_by_name = {link.attrib['name']: link for link in links}
     joint_by_name = {joint.attrib['name']: joint for joint in joints}
@@ -439,12 +447,87 @@ def main():
     assert math.isclose(
         camera_height, (upper_bottom + upper_top) / 2.0, abs_tol=1e-9)
 
+    # Four VL53L7CX carriers, one at the centre of each body face. Each link
+    # origin is the optical aperture rather than the centre of the board, the
+    # same way lidar_link is the scan plane, so these are the points rays
+    # actually leave from.
+    TOF_BOARD_THICKNESS = 0.003
+    TOF_BOARD_WIDTH = 0.013
+    TOF_BOARD_LENGTH = 0.018
+    TOF_MODULE_HEIGHT = 0.00175
+    tof_expected = {
+        'front': (CHASSIS_LENGTH / 2.0, 0.0, 0.0),
+        'rear': (-CHASSIS_LENGTH / 2.0, 0.0, math.pi),
+        'left': (0.0, OVERALL_WIDTH / 2.0, math.pi / 2.0),
+        'right': (0.0, -OVERALL_WIDTH / 2.0, -math.pi / 2.0),
+    }
+    for face, (want_x, want_y, want_yaw) in tof_expected.items():
+        tof_link = link_by_name[f'tof_{face}_link']
+        tof_joint = joint_by_name[f'base_link_to_tof_{face}_link_joint']
+        origin = tof_joint.find('origin')
+        got_x, got_y, got_z = xyz(origin)
+        got_yaw = float(origin.attrib['rpy'].split()[2])
+
+        # The aperture sits on the body's outer face. For the side sensors
+        # that is not a stylistic choice: the wing outer face is coplanar with
+        # the wheel outer faces, so a fan centred there keeps a positive
+        # outward component and grazes past the wheel. Recess the aperture
+        # inboard and the outer zones of the fan cut into the wheel instead,
+        # which is why this is an equality and not a bound.
+        assert math.isclose(got_x, want_x, abs_tol=1e-9), face
+        assert math.isclose(got_y, want_y, abs_tol=1e-9), face
+        assert math.isclose(got_yaw, want_yaw, abs_tol=1e-9), face
+
+        # Every sensor stands on the lower deck, aperture half a board up.
+        aperture = ground(got_z)
+        assert math.isclose(
+            aperture, lower_top + TOF_BOARD_LENGTH / 2.0, abs_tol=1e-9), face
+        # And the board clears the upper deck it sits under.
+        assert aperture + TOF_BOARD_LENGTH / 2.0 < upper_bottom, face
+
+        # Two visuals, the populated PCB and the module standing on it, which
+        # together span exactly the envelope the vendor quotes for the board.
+        tof_visuals = tof_link.findall('visual')
+        assert len(tof_visuals) == 2, face
+        depths = []
+        for visual in tof_visuals:
+            box = visual.find('./geometry/box')
+            assert box is not None, face
+            size = [float(value) for value in box.attrib['size'].split()]
+            centre = xyz(visual.find('origin'))[0]
+            depths.append((centre - size[0] / 2.0, centre + size[0] / 2.0))
+        near = max(top for _, top in depths)
+        far = min(bottom for bottom, _ in depths)
+        # The module's outer face is flush with the aperture, and the board
+        # hangs entirely inboard of it.
+        assert math.isclose(near, 0.0, abs_tol=1e-9), face
+        assert math.isclose(far, -TOF_BOARD_THICKNESS, abs_tol=1e-9), face
+        module_depth = max(top - bottom for bottom, top in depths
+                           if math.isclose(top, 0.0, abs_tol=1e-9))
+        assert math.isclose(
+            module_depth, TOF_MODULE_HEIGHT, abs_tol=1e-9), face
+
+        # One collision box over the whole carrier, board and module together.
+        tof_collisions = tof_link.findall('collision')
+        assert len(tof_collisions) == 1, face
+        collision_size = [
+            float(value) for value
+            in tof_collisions[0].find('./geometry/box').attrib['size'].split()
+        ]
+        assert math.isclose(
+            collision_size[0], TOF_BOARD_THICKNESS, abs_tol=1e-9), face
+        assert math.isclose(
+            collision_size[1], TOF_BOARD_WIDTH, abs_tol=1e-9), face
+        assert math.isclose(
+            collision_size[2], TOF_BOARD_LENGTH, abs_tol=1e-9), face
+
     parent_by_child = {
         joint.find('child').attrib['link']:
         joint.find('parent').attrib['link']
         for joint in joints
     }
-    for sensor_frame in ('lidar_link', 'imu_link'):
+    for sensor_frame in ('lidar_link', 'imu_link', 'tof_front_link',
+                         'tof_rear_link', 'tof_left_link', 'tof_right_link'):
         current = sensor_frame
         visited = set()
         while current != 'base_link':
@@ -467,7 +550,9 @@ def main():
         sensor.attrib['name']: sensor
         for sensor in gazebo_robot.findall('.//sensor')
     }
-    assert set(sensors) == {'camera', 'lidar', 'imu'}
+    assert set(sensors) == {'camera', 'lidar', 'imu'} | {
+        f'tof_{face}' for face in TOF_FACES
+    }
 
     lidar = sensors['lidar']
     assert lidar.attrib['type'] == 'gpu_lidar'
@@ -488,6 +573,40 @@ def main():
     assert float(lidar.findtext('lidar/range/max')) == 4.0
     assert float(lidar.findtext('update_rate')) == 10.0
     assert float(lidar.findtext('lidar/noise/stddev')) == 0.01
+
+    # Each ToF is simulated as the 8 x 8 zone grid the part actually reports,
+    # not as a single centre ray. The grid is the whole point: one ray cannot
+    # show where the fan stops covering, and it cannot show the bottom rows
+    # reaching the floor, which is why these sensors sit as low as they do.
+    #
+    # The ray angles run to the outermost zone centres, half a zone inside the
+    # 30 degree field edge. Handing Gazebo the field edge instead would splay
+    # every ray outward and overstate the coverage by a zone's width.
+    TOF_FOV = math.radians(60.0)
+    TOF_ZONES = 8
+    TOF_HALF_SPAN = TOF_FOV / 2.0 - (TOF_FOV / TOF_ZONES) / 2.0
+    for face in TOF_FACES:
+        tof = sensors[f'tof_{face}']
+        assert tof.attrib['type'] == 'gpu_lidar', face
+        assert tof.findtext('topic') == f'/tof/{face}', face
+        assert tof.findtext('gz_frame_id') == f'tof_{face}_link', face
+        for axis in ('horizontal', 'vertical'):
+            assert int(
+                tof.findtext(f'lidar/scan/{axis}/samples')) == TOF_ZONES, face
+            assert math.isclose(
+                float(tof.findtext(f'lidar/scan/{axis}/min_angle')),
+                -TOF_HALF_SPAN,
+                abs_tol=1e-9,
+            ), face
+            assert math.isclose(
+                float(tof.findtext(f'lidar/scan/{axis}/max_angle')),
+                TOF_HALF_SPAN,
+                abs_tol=1e-9,
+            ), face
+        assert float(tof.findtext('lidar/range/min')) == 0.02, face
+        assert float(tof.findtext('lidar/range/max')) == 3.5, face
+        assert float(tof.findtext('update_rate')) == 15.0, face
+        assert float(tof.findtext('lidar/noise/stddev')) == 0.01, face
 
     imu = sensors['imu']
     assert imu.attrib['type'] == 'imu'

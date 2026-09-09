@@ -41,7 +41,11 @@ def valid_statistics():
 def test_config_selects_raw_and_fused_streams():
     raw = load_contracts(CONFIG, 'raw')
     fused = load_contracts(CONFIG, 'fused')
-    assert {item.name for item in raw} == {'imu', 'scan', 'raw_odometry'}
+    # The four ToF clouds are a near-field layer that nothing fuses yet, so
+    # they are required in raw and absent from fused.
+    tof = {f'tof_{face}' for face in ('front', 'rear', 'left', 'right')}
+    assert {item.name for item in raw} == {
+        'imu', 'scan', 'raw_odometry'} | tof
     assert {item.name for item in fused} == {
         'imu', 'scan', 'raw_odometry', 'filtered_odometry'}
 
