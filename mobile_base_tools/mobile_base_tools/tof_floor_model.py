@@ -49,9 +49,24 @@ known distance, and stopped measurably short of it, hit something standing in
 between. That catches the vertical faces the height test cannot, and it is what
 makes the downward rows useful for obstacles rather than only for floor.
 
+The floor those heights are measured from is fitted from the sensors, not
+assumed level and not taken from the IMU. That choice matters more than it
+looks. An IMU reports attitude against gravity, but what decides whether a
+return is floor is attitude against *the floor*, and the two disagree exactly
+where it counts: on a steady ramp the robot is tilted and the ramp is tilted
+with it, so in the robot's own frame nothing has moved at all. Subtracting IMU
+pitch there would tilt the model away from a surface that never went anywhere
+and paint the whole ramp as a drop-off.
+
+Fitting instead from the steep near rows - the ones that reach the floor within
+150 mm and move only 2.5 to 13 mm per degree - gives a reference that is right
+on a ramp, right under acceleration, and right on a floor that is simply not
+where the model said it was. It is also self-correcting: the measurement that
+defines the floor is the same measurement being classified against it.
+
 This module holds no ROS. It takes geometry and ranges and returns labels, so
-the interesting cases - a cliff at the edge of range, a shallow ray under pitch
-- can be tested at a desk without a simulator.
+the interesting cases - a cliff at the edge of range, a ramp, a floor that is
+not level - can be tested at a desk without a simulator.
 """
 
 import math
@@ -62,26 +77,6 @@ OBSTACLE = 'obstacle'
 CLIFF = 'cliff'
 OVERHEAD = 'overhead'
 FREE = 'free'
-
-
-def rotate_pitch_roll(direction, pitch, roll):
-    """Rotate a body-frame direction into the ground frame.
-
-    Applied as roll about X then pitch about Y, which is the order that leaves
-    yaw untouched - yaw is already carried by each sensor's fixed mount and
-    does not affect height above the floor.
-
-    Signs follow REP-103, so this is the standard rotation about +Y: positive
-    pitch tips the nose DOWN. A robot climbing a ramp therefore reports negative
-    pitch. Getting this backwards moves the floor the wrong way and turns every
-    ramp into a wall of phantom cliffs, so it is asserted in the tests.
-    """
-    x, y, z = direction
-    cos_roll, sin_roll = math.cos(roll), math.sin(roll)
-    y, z = y * cos_roll - z * sin_roll, y * sin_roll + z * cos_roll
-    cos_pitch, sin_pitch = math.cos(pitch), math.sin(pitch)
-    x, z = x * cos_pitch + z * sin_pitch, -x * sin_pitch + z * cos_pitch
-    return (x, y, z)
 
 
 class FloorGeometry:
@@ -122,61 +117,163 @@ class FloorGeometry:
         self.min_range = min_range
 
 
-class SensorPlacement:
-    """One sensor's aperture height and its zone directions in the body frame.
+class FloorPlane:
+    """The floor as the sensors currently see it: ``z = a*x + b*y + c``.
 
-    ``directions`` are the unit rays from ``zone_directions`` in
-    ``tof_ray_markers``, already rotated by the sensor's fixed mount yaw, so
-    this class never needs to know which face it belongs to.
+    Held in the body frame, so a level floor under a level robot is
+    ``a = b = c = 0`` and a robot climbing a ramp still measures ``a = b = 0``
+    - the ramp is tilted, but so is the robot, and in its own frame the surface
+    it is standing on has not moved. That is the whole reason this is fitted
+    rather than derived from an IMU.
     """
 
-    def __init__(self, frame_id, height, directions):
-        self.frame_id = frame_id
-        self.height = height
-        self.directions = directions
+    def __init__(self, a=0.0, b=0.0, c=0.0, samples=0):
+        self.a = a
+        self.b = b
+        self.c = c
+        self.samples = samples
+
+    def height_at(self, x, y):
+        """Floor height under a body-frame point."""
+        return self.a * x + self.b * y + self.c
+
+    def residual(self, point):
+        """How far a body-frame point sits above the floor."""
+        return point[2] - self.height_at(point[0], point[1])
+
+    def tilt(self):
+        """Slope magnitude, radians. Large values mean a bad or partial fit."""
+        return math.atan(math.hypot(self.a, self.b))
 
 
-def expected_floor_range(height, direction_z, max_range):
-    """Return the range at which a ray would meet a flat floor.
+def fit_plane(points, max_tilt=math.radians(20.0), rejection=0.020):
+    """Least-squares plane through floor candidates, with one rejection pass.
 
-    ``None`` when the ray never gets there: pointed level or upward, or angled
-    so shallowly that the floor lies beyond the sensor's reach. That second case
-    is the one that matters, and it is why this is computed live from attitude
-    rather than baked in per row. A few degrees of nose-up pitch walks the
-    shallowest row's intercept out past the maximum range, and a ray that cannot
-    reach the floor must never be read as evidence the floor is missing.
+    Returns the level plane when there is too little to fit or the fit comes
+    out implausibly steep. Refusing a bad fit matters: a plane dragged onto the
+    face of an obstacle would re-label the real floor around it as a drop, so
+    the safe failure is to fall back to level rather than to trust three points
+    on a wall.
     """
-    if direction_z >= 0.0:
+    if len(points) < 6:
+        return FloorPlane(samples=len(points))
+
+    def solve(sample):
+        n = len(sample)
+        sx = sy = sz = sxx = sxy = syy = sxz = syz = 0.0
+        for x, y, z in sample:
+            sx += x
+            sy += y
+            sz += z
+            sxx += x * x
+            sxy += x * y
+            syy += y * y
+            sxz += x * z
+            syz += y * z
+        matrix = (
+            (sxx, sxy, sx),
+            (sxy, syy, sy),
+            (sx, sy, float(n)),
+        )
+        determinant = (
+            matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+            - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+            + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+        )
+        if abs(determinant) < 1e-12:
+            return None
+        rhs = (sxz, syz, sz)
+
+        def replaced(column):
+            copy = [list(row) for row in matrix]
+            for row in range(3):
+                copy[row][column] = rhs[row]
+            return (
+                copy[0][0] * (copy[1][1] * copy[2][2] - copy[1][2] * copy[2][1])
+                - copy[0][1] * (copy[1][0] * copy[2][2] - copy[1][2] * copy[2][0])
+                + copy[0][2] * (copy[1][0] * copy[2][1] - copy[1][1] * copy[2][0])
+            )
+
+        return (
+            replaced(0) / determinant,
+            replaced(1) / determinant,
+            replaced(2) / determinant,
+        )
+
+    first = solve(points)
+    if first is None:
+        return FloorPlane(samples=len(points))
+    plane = FloorPlane(*first, samples=len(points))
+
+    kept = [
+        point for point in points
+        if abs(plane.residual(point)) <= rejection
+    ]
+    if len(kept) >= 6 and len(kept) < len(points):
+        second = solve(kept)
+        if second is not None:
+            plane = FloorPlane(*second, samples=len(kept))
+
+    if plane.tilt() > max_tilt:
+        return FloorPlane(samples=len(points))
+    return plane
+
+
+def expected_floor_range(plane, origin, direction, max_range):
+    """Range at which a ray leaving ``origin`` would meet ``plane``.
+
+    ``None`` when it never gets there - aimed level or upward relative to the
+    surface, or angled so shallowly the floor lies beyond reach. That second
+    case is not a detail. A ray that cannot reach the floor must never be read
+    as evidence the floor is missing, or the robot stops dead every time the
+    geometry tips a shallow row out of range.
+    """
+    denominator = (
+        direction[2] - plane.a * direction[0] - plane.b * direction[1])
+    if denominator >= 0.0:
         return None
-    distance = height / -direction_z
-    if distance > max_range:
+    numerator = (
+        plane.a * origin[0] + plane.b * origin[1] + plane.c - origin[2])
+    distance = numerator / denominator
+    if distance <= 0.0 or distance > max_range:
         return None
     return distance
 
 
-def classify_zone(geometry, height, direction, measured_range):
+def classify_zone(geometry, plane, origin, direction, measured_range):
     """Label one zone. ``measured_range`` is None when the zone did not return.
 
-    Returns ``(label, z_hit)``, where ``z_hit`` is the height of the return
-    above the floor, or None for a zone that returned nothing.
+    Returns ``(label, point, residual)``. ``point`` is where the return landed
+    in the body frame, or where the floor was expected for a zone that saw
+    nothing; ``residual`` is its height above the fitted floor.
     """
     expected = expected_floor_range(
-        height, direction[2], geometry.max_range)
+        plane, origin, direction, geometry.max_range)
+
+    def along(distance):
+        return (
+            origin[0] + distance * direction[0],
+            origin[1] + distance * direction[1],
+            origin[2] + distance * direction[2],
+        )
 
     if measured_range is None or not math.isfinite(measured_range):
-        # The asymmetry this module exists for. A ray that was aimed at reachable
-        # floor and saw nothing is a drop; a ray aimed anywhere else is space.
-        return (CLIFF if expected is not None else FREE), None
+        # The asymmetry this module exists for. A ray aimed at reachable floor
+        # that saw nothing is a drop; a ray aimed anywhere else is open space.
+        if expected is None:
+            return FREE, None, None
+        return CLIFF, along(expected), None
 
     if measured_range <= geometry.min_range:
-        return FREE, None
+        return FREE, None, None
 
-    z_hit = height + measured_range * direction[2]
+    point = along(measured_range)
+    residual = plane.residual(point)
 
-    if z_hit > geometry.robot_height:
-        return OVERHEAD, z_hit
-    if z_hit > geometry.obstacle_min_height:
-        return OBSTACLE, z_hit
+    if residual > geometry.robot_height:
+        return OVERHEAD, point, residual
+    if residual > geometry.obstacle_min_height:
+        return OBSTACLE, point, residual
     if (expected is not None
             and measured_range < expected - geometry.range_shortfall):
         # The ray was going to meet the floor and stopped short, so something
@@ -184,38 +281,36 @@ def classify_zone(geometry, height, direction, measured_range):
         # obstacle's vertical face: a downward ray cannot report a height above
         # the aperture it left, so on height alone every such face reads as
         # floor however tall the object behind it is.
-        return OBSTACLE, z_hit
-    if z_hit < -geometry.cliff_min_depth:
-        return CLIFF, z_hit
+        return OBSTACLE, point, residual
+    if residual < -geometry.cliff_min_depth:
+        return CLIFF, point, residual
     # Anything left is floor, including returns between the floor band and the
     # obstacle threshold: real, but too small to separate from the floor, so
     # reported as floor rather than marked.
-    return FLOOR, z_hit
+    return FLOOR, point, residual
 
 
-def classify_sensor(geometry, placement, ranges, pitch=0.0, roll=0.0):
-    """Classify every zone of one sensor.
+def floor_candidates(origin, directions, ranges, rows, zones, max_range):
+    """Body-frame points from the steep near rows, for fitting the floor.
 
-    Yields ``(index, label, direction, z_hit)`` per zone, with the direction
-    already tilted into the ground frame so callers can place the point.
+    Only the rows listed in ``rows`` contribute. They reach the floor within
+    150 mm and shift 2.5 to 13 mm per degree of attitude error, where the
+    shallowest row shifts 116 - fitting on that one would hand the noisiest
+    sample the longest lever arm.
     """
-    for index, (direction, measured) in enumerate(
-            zip(placement.directions, ranges)):
-        tilted = rotate_pitch_roll(direction, pitch, roll)
-        label, z_hit = classify_zone(
-            geometry, placement.height, tilted, measured)
-        yield index, label, tilted, z_hit
-
-
-def floor_residual(geometry, height, direction, measured_range):
-    """Return how far a return sits above the expected floor, or None.
-
-    Positive is above the floor. Used for the plane quality estimate rather than
-    for classification, which reads ``z_hit`` directly.
-    """
-    expected = expected_floor_range(height, direction[2], geometry.max_range)
-    if expected is None or measured_range is None:
-        return None
-    if not math.isfinite(measured_range):
-        return None
-    return height + measured_range * direction[2]
+    points = []
+    for index, (direction, measured) in enumerate(zip(directions, ranges)):
+        if index // zones not in rows:
+            continue
+        if measured is None or not math.isfinite(measured):
+            continue
+        if measured <= 0.0 or measured > max_range:
+            continue
+        if direction[2] >= 0.0:
+            continue
+        points.append((
+            origin[0] + measured * direction[0],
+            origin[1] + measured * direction[1],
+            origin[2] + measured * direction[2],
+        ))
+    return points

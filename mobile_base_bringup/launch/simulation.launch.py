@@ -481,6 +481,8 @@ def generate_launch_description():
             # the sensor pipeline, so they can be turned off without
             # affecting the clouds the sensors publish.
             DeclareLaunchArgument('tof_markers', default_value='true'),
+            # The classifier is what feeds the costmaps; the markers only draw.
+            DeclareLaunchArgument('tof_classifier', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
             # Controller spawners start RViz from a delayed process-exit
             # handler. Capture this include's value now so a later include
@@ -595,6 +597,22 @@ def generate_launch_description():
                     '/tof/rear_right/points@sensor_msgs/msg/PointCloud2'
                     '[gz.msgs.PointCloudPacked',
                 ],
+                parameters=[
+                    {
+                        'use_sim_time': LaunchConfiguration(
+                            'use_sim_time'
+                        )
+                    }
+                ],
+                output='screen',
+            ),
+            Node(
+                package='mobile_base_tools',
+                executable='tof_floor_classifier',
+                name='tof_floor_classifier',
+                condition=IfCondition(
+                    LaunchConfiguration('tof_classifier')
+                ),
                 parameters=[
                     {
                         'use_sim_time': LaunchConfiguration(
