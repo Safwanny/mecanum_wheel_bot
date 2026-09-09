@@ -269,6 +269,78 @@
   <xacro:property name="lidar_noise_mean" value="0.0"/>
   <xacro:property name="lidar_noise_stddev" value="0.01"/>
 
+  <!-- ==================== ToF perimeter ====================
+       Four VL53L7CX multizone Time-of-Flight sensors on the Pololu #3418
+       carrier, one at the centre of each body face. The LiDAR scan plane sits
+       at 0.0915 m and sees one horizontal slice; these sit low on the lower
+       deck and see the near field the scan plane misses, floor included.
+
+       The VL53L7CX is chosen over the VL53L5CX and VL53L8CX for its field of
+       view alone. With only four sensors the FoV width is what sets the size
+       of the blind wedges: 60 degrees covers 240 of 360 with 30 degree wedges
+       left on the diagonals, where the 45 degree optics of the other two parts
+       would leave 45 degree wedges. Range is the wrong thing to optimise here
+       - nothing indoors is read past a metre through a zone this coarse. -->
+
+  <!-- Carrier board envelope, from the Pololu #3418 product page: the stated
+       13 x 18 x 3 mm covers the populated board, regulators and level shifter
+       included, so it is what collision and inertia use. The board stands
+       upright on the lower deck with its long axis vertical, its plane
+       parallel to the body face it guards. -->
+  <xacro:property name="tof_board_thickness" value="0.003"/>
+  <xacro:property name="tof_board_width" value="0.013"/>
+  <xacro:property name="tof_board_length" value="0.018"/>
+  <xacro:property name="tof_mass" value="0.0005"/>
+  <!-- The sensor package itself, which stands proud of the board and carries
+       the aperture. The PCB slab visual takes the rest of the 3 mm, so the two
+       visuals sum to exactly the envelope above rather than overrunning it. -->
+  <xacro:property name="tof_module_length" value="0.0064"/>
+  <xacro:property name="tof_module_width" value="0.003"/>
+  <xacro:property name="tof_module_height" value="0.00175"/>
+  <xacro:property name="tof_pcb_thickness"
+                  value="${tof_board_thickness - tof_module_height}"/>
+
+  <!-- Optics. The part reports an 8 x 8 grid of zones over a 60 x 60 degree
+       square field of view, so each zone spans 7.5 degrees. -->
+  <xacro:property name="tof_fov" value="${radians(60)}"/>
+  <xacro:property name="tof_zones" value="8"/>
+  <xacro:property name="tof_zone_angle" value="${tof_fov / tof_zones}"/>
+  <!-- Gazebo's min_angle and max_angle are ray angles, and a ray lands at the
+       centre of its zone rather than at the edge of the field. Eight zone
+       centres across 60 degrees therefore run to 26.25 degrees, half a zone
+       inside the 30 degree FoV edge. Handing Gazebo 30 degrees would splay
+       every ray outward and quietly overstate the coverage. -->
+  <xacro:property name="tof_half_span"
+                  value="${tof_fov / 2.0 - tof_zone_angle / 2.0}"/>
+
+  <!-- Ranging. tof_min_range is the near dead zone: the part returns nothing
+       useful inside it, so the ray visualisation starts there rather than at
+       the aperture. -->
+  <xacro:property name="tof_min_range" value="0.02"/>
+  <xacro:property name="tof_max_range" value="3.5"/>
+  <xacro:property name="tof_range_resolution" value="0.001"/>
+  <xacro:property name="tof_update_rate" value="15.0"/>
+  <xacro:property name="tof_noise_mean" value="0.0"/>
+  <xacro:property name="tof_noise_stddev" value="0.01"/>
+
+  <!-- Placement. Each tof link origin is the optical aperture, the point rays
+       leave from, the same way lidar_link is the scan plane rather than the
+       body of the sensor. The aperture sits on the body's outer face and the
+       board hangs inboard behind it.
+
+       The side apertures sit exactly at wheel_outer_y and must stay there. The
+       wing outer face is coplanar with the wheel outer faces, so every ray in
+       the fan keeps a positive outward component and grazes past the wheel.
+       Recessing the aperture even a board thickness inboard would put the
+       outer zones of the fan into the wheel instead. -->
+  <xacro:property name="tof_front_x" value="${chassis_length / 2.0}"/>
+  <xacro:property name="tof_side_y" value="${wheel_outer_y}"/>
+  <!-- Standing on the lower deck top face, so the aperture is half a board up
+       from it. The board top clears the upper deck underside by 22 mm. -->
+  <xacro:property name="tof_z"
+                  value="${lower_deck_top_z + tof_board_length / 2.0
+                           - base_link_height}"/>
+
   <!-- Simulated IMU. Noise values are standard deviations in SI units. -->
   <xacro:property name="imu_length" value="0.025"/>
   <xacro:property name="imu_width" value="0.025"/>
@@ -309,7 +381,8 @@
   <xacro:property name="component_mass"
                   value="${battery_mass + 4.0 * motor_mass
                            + 2.0 * driver_mass + mcu_mass
-                           + lidar_mass + imu_mass + camera_mass}"/>
+                           + lidar_mass + imu_mass + camera_mass
+                           + 4.0 * tof_mass}"/>
   <xacro:property name="deck_mass"
                   value="${(total_body_mass - component_mass) / 2.0}"/>
 </robot>

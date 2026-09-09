@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- A VL53L7CX simulated as what it physically is: a grid of rays, not a
+       single beam. Gazebo's gpu_lidar takes independent horizontal and
+       vertical sample counts, so the part's 8 x 8 zone grid maps onto it
+       directly, and the sensor publishes an organised point cloud on
+       <topic>/points alongside the flattened scan on <topic>.
+
+       Modelling all 64 zones rather than one centre ray is the point of the
+       exercise. A single ray cannot show where the fan stops covering, and it
+       cannot show the bottom rows reaching the floor, which is the whole
+       reason these sensors sit this low. -->
+  <xacro:macro name="mobile_base_tof_gazebo_one" params="prefix name">
+    <gazebo reference="${prefix}tof_${name}_link">
+      <sensor name="${prefix}tof_${name}" type="gpu_lidar">
+        <always_on>true</always_on>
+        <update_rate>${tof_update_rate}</update_rate>
+        <visualize>false</visualize>
+        <topic>/tof/${name}</topic>
+        <gz_frame_id>${prefix}tof_${name}_link</gz_frame_id>
+        <lidar>
+          <scan>
+            <!-- Angles run to the outermost zone centres, half a zone inside
+                 the field edge. See tof_half_span in properties.xacro. -->
+            <horizontal>
+              <samples>${tof_zones}</samples>
+              <resolution>1</resolution>
+              <min_angle>${-tof_half_span}</min_angle>
+              <max_angle>${tof_half_span}</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>${tof_zones}</samples>
+              <resolution>1</resolution>
+              <min_angle>${-tof_half_span}</min_angle>
+              <max_angle>${tof_half_span}</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>${tof_min_range}</min>
+            <max>${tof_max_range}</max>
+            <resolution>${tof_range_resolution}</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>${tof_noise_mean}</mean>
+            <stddev>${tof_noise_stddev}</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:macro name="mobile_base_tof_gazebo" params="prefix">
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="front"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="rear"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="left"/>
+    <xacro:mobile_base_tof_gazebo_one prefix="${prefix}" name="right"/>
+  </xacro:macro>
+</robot>

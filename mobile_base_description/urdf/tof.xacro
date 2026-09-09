@@ -1,0 +1,91 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- One VL53L7CX carrier, guarding one body face.
+
+       The link origin is the optical aperture, not the centre of the board:
+       rays leave from here, so this is the frame the zone grid is expressed
+       in and the frame Gazebo is handed. Everything physical hangs inboard of
+       it along -X, which is into the body, because the macro is always called
+       with the yaw that points +X out through the face.
+
+       This is the same split the LiDAR uses - lidar_link is the scan plane
+       rather than the body of the sensor - and for the same reason: the
+       optically meaningful point is the one every downstream consumer needs,
+       and burying it inside a mesh offset makes every later transform a
+       guess.
+
+       The component macros in macros/components.xacro cannot serve here. Both
+       pin rpy to zero on the joint, and three of these four sensors are turned
+       to face their own wall. -->
+  <xacro:macro name="mobile_base_tof" params="prefix name x y z yaw">
+    <link name="${prefix}tof_${name}_link">
+      <!-- The populated PCB, set back behind the module that stands on it. -->
+      <visual>
+        <origin
+          xyz="${-tof_module_height - tof_pcb_thickness / 2.0} 0 0"
+          rpy="0 0 0"/>
+        <geometry>
+          <box size="${tof_pcb_thickness} ${tof_board_width}
+                     ${tof_board_length}"/>
+        </geometry>
+        <material name="electronics_green"/>
+      </visual>
+      <!-- The sensor package, its front face flush with the body face. -->
+      <visual>
+        <origin xyz="${-tof_module_height / 2.0} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${tof_module_height} ${tof_module_length}
+                     ${tof_module_width}"/>
+        </geometry>
+        <material name="sensor_grey"/>
+      </visual>
+      <!-- One box over the whole carrier, board and module together, matching
+           the envelope the vendor quotes. -->
+      <collision>
+        <origin xyz="${-tof_board_thickness / 2.0} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${tof_board_thickness} ${tof_board_width}
+                     ${tof_board_length}"/>
+        </geometry>
+      </collision>
+      <xacro:box_inertial mass="${tof_mass}"
+                          x="${tof_board_thickness}" y="${tof_board_width}"
+                          z="${tof_board_length}">
+        <origin xyz="${-tof_board_thickness / 2.0} 0 0" rpy="0 0 0"/>
+      </xacro:box_inertial>
+    </link>
+
+    <joint name="${prefix}base_link_to_tof_${name}_link_joint" type="fixed">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}tof_${name}_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 ${yaw}"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- The perimeter as built: one sensor at the centre of each body face.
+
+       Front and rear sit on the bumper line, where the end caps already reach
+       past the wheels, so the sensor guards the part of the body that takes a
+       knock first. Left and right sit on the wing outer faces at the widest
+       point of the robot, which is the only side position whose fan clears the
+       wheels - see the placement note in properties.xacro.
+
+       Four sensors on the cardinal axes leave 30 degree wedges on the
+       diagonals, which is where a mecanum base moves when it strafes at 45
+       degrees. Those wedges are the reason four more sensors belong on the
+       chamfered corners later; the macro above already takes an arbitrary yaw,
+       so adding them is four more calls and four more property pairs. -->
+  <xacro:macro name="mobile_base_tof_array" params="prefix">
+    <xacro:mobile_base_tof prefix="${prefix}" name="front"
+                           x="${tof_front_x}" y="0" z="${tof_z}" yaw="0"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="rear"
+                           x="${-tof_front_x}" y="0" z="${tof_z}"
+                           yaw="${pi}"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="left"
+                           x="0" y="${tof_side_y}" z="${tof_z}"
+                           yaw="${pi / 2.0}"/>
+    <xacro:mobile_base_tof prefix="${prefix}" name="right"
+                           x="0" y="${-tof_side_y}" z="${tof_z}"
+                           yaw="${-pi / 2.0}"/>
+  </xacro:macro>
+</robot>

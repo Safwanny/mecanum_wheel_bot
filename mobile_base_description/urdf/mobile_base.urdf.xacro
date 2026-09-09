@@ -15,16 +15,19 @@
   <xacro:include filename="camera.xacro"/>
   <xacro:include filename="lidar.xacro"/>
   <xacro:include filename="imu.xacro"/>
+  <xacro:include filename="tof.xacro"/>
   <xacro:include filename="mobile_base.ros2_control.xacro"/>
   <xacro:include filename="mobile_base.gazebo.xacro"/>
   <xacro:include filename="camera.gazebo.xacro"/>
   <xacro:include filename="lidar.gazebo.xacro"/>
   <xacro:include filename="imu.gazebo.xacro"/>
+  <xacro:include filename="tof.gazebo.xacro"/>
 
   <xacro:mobile_base_assembly prefix="$(arg prefix)"/>
   <xacro:mobile_base_camera prefix="$(arg prefix)"/>
   <xacro:mobile_base_lidar prefix="$(arg prefix)"/>
   <xacro:mobile_base_imu prefix="$(arg prefix)"/>
+  <xacro:mobile_base_tof_array prefix="$(arg prefix)"/>
 
   <xacro:mobile_base_ros2_control
     prefix="$(arg prefix)"
@@ -36,5 +39,6 @@
     <xacro:mobile_base_camera_gazebo prefix="$(arg prefix)"/>
     <xacro:mobile_base_lidar_gazebo prefix="$(arg prefix)"/>
     <xacro:mobile_base_imu_gazebo prefix="$(arg prefix)"/>
+    <xacro:mobile_base_tof_gazebo prefix="$(arg prefix)"/>
   </xacro:if>
 </robot>
