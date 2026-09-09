@@ -58,6 +58,13 @@ def generate_launch_description():
             description='Path to a saved Nav2 occupancy-map YAML file.',
         ),
         DeclareLaunchArgument('world', default_value='navigation_basic'),
+        # Spawn pose, forwarded so a raised world such as
+        # proving_ground can put the robot on its deck rather than
+        # beside it. Without this the wrapper silently drops them.
+        DeclareLaunchArgument('x', default_value='0.0'),
+        DeclareLaunchArgument('y', default_value='0.0'),
+        DeclareLaunchArgument('z', default_value='0.10'),
+        DeclareLaunchArgument('yaw', default_value='0.0'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
         DeclareLaunchArgument('render_engine', default_value='ogre2'),
@@ -226,6 +233,10 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(localization_launch),
             launch_arguments={
+                'x': LaunchConfiguration('x'),
+                'y': LaunchConfiguration('y'),
+                'z': LaunchConfiguration('z'),
+                'yaw': LaunchConfiguration('yaw'),
                 'map': LaunchConfiguration('map'),
                 'world': LaunchConfiguration('world'),
                 'gui': LaunchConfiguration('gui'),
