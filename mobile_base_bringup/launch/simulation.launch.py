@@ -477,6 +477,10 @@ def generate_launch_description():
                 description='Use the Gazebo simulation clock for ROS nodes.',
             ),
             DeclareLaunchArgument('gui', default_value='true'),
+            # The ToF ray markers are a visualisation aid, not part of
+            # the sensor pipeline, so they can be turned off without
+            # affecting the clouds the sensors publish.
+            DeclareLaunchArgument('tof_markers', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
             # Controller spawners start RViz from a delayed process-exit
             # handler. Capture this include's value now so a later include
@@ -570,7 +574,35 @@ def generate_launch_description():
                     '/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
                     '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
                     '/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
+                    # Each ToF sensor scans an 8x8 grid, so Gazebo publishes
+                    # an organised cloud on <topic>/points beside the
+                    # flattened scan. The cloud is the one that keeps the
+                    # grid, so it is the one bridged.
+                    '/tof/front/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
+                    '/tof/rear/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
+                    '/tof/left/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
+                    '/tof/right/points@sensor_msgs/msg/PointCloud2'
+                    '[gz.msgs.PointCloudPacked',
                 ],
+                parameters=[
+                    {
+                        'use_sim_time': LaunchConfiguration(
+                            'use_sim_time'
+                        )
+                    }
+                ],
+                output='screen',
+            ),
+            Node(
+                package='mobile_base_tools',
+                executable='tof_ray_markers',
+                name='tof_ray_markers',
+                condition=IfCondition(
+                    LaunchConfiguration('tof_markers')
+                ),
                 parameters=[
                     {
                         'use_sim_time': LaunchConfiguration(
