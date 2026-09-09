@@ -175,6 +175,7 @@ one motor shaft offset below the wheel axle:
 | --- | --- |
 | Lower deck underside (ground clearance) | 0.0095 m |
 | Lower deck top, motors stand here | 0.0195 m |
+| ToF apertures | 0.0285 m |
 | Motor driver tops | 0.0312 m |
 | Battery top | 0.0445 m |
 | Motor tops | 0.0419 m |
@@ -186,6 +187,30 @@ one motor shaft offset below the wheel axle:
 The camera is mounted on the front face of the upper deck, centred on the
 plate's thickness. The LiDAR is a square dark base carrying a cylindrical
 rotating head, and its collision is one box bounding both.
+
+Four VL53L7CX Time-of-Flight sensors stand on the lower deck, one at the centre
+of each body face, on the Pololu #3418 carrier at its quoted 13 x 18 x 3 mm.
+Each link origin is the optical aperture rather than the centre of the board,
+the same convention `lidar_link` follows: the aperture is where rays leave, so
+it is what every consumer needs. The board hangs inboard behind it, standing
+upright, and clears the upper deck underside by 22 mm.
+
+The LiDAR sees one horizontal slice at 0.0915 m. These sit at 0.0285 m and see
+what that slice cannot - the near field, and the floor. Each reports an 8 x 8
+grid of zones over a 60 x 60 degree field, so the bottom rows land on the floor
+just ahead of the body while the top rows watch for obstacles.
+
+The side apertures sit exactly at `wheel_outer_y` and must stay there. The wing
+outer face is coplanar with the wheel outer faces, so every ray in the fan keeps
+a positive outward component and grazes past the wheel. Recessing the aperture
+even a board thickness inboard puts the outer zones of the fan into the wheel
+instead, which is why the sensor test asserts that position as an equality.
+
+Four sensors on the cardinal axes cover 240 degrees of 360, leaving 30 degree
+wedges on the diagonals - which is where a mecanum base travels when it strafes
+at 45 degrees. Those wedges are why four more sensors belong on the chamfered
+corners; the description macro already takes an arbitrary yaw, so adding them is
+four more calls.
 
 Ground clearance is therefore not a free parameter: it is
 `wheel_radius - motor_shaft_offset - lower_deck_thickness`, and a thicker lower
@@ -254,7 +279,8 @@ power components.
 | Two TB6612FNG drivers | 0.006 kg |
 | ESP32-S3 devkit | 0.012 kg |
 | LiDAR, IMU, camera | 0.190 kg |
-| Two deck plates, the balance | 1.222 kg |
+| Four VL53L7CX carriers | 0.002 kg |
+| Two deck plates, the balance | 1.221 kg |
 | **`total_body_mass`** | **1.800 kg** |
 
 The wheels hang off revolute joints, so they are not lumped and are not counted
@@ -812,6 +838,10 @@ map ──(AMCL)──> odom ──(EKF)──> base_footprint ──> base_link
                                                      ├──> lidar_link
                                                      ├──> imu_link
                                                      ├──> camera_link ──> camera_optical_frame
+                                                     ├──> tof_front_link
+                                                     ├──> tof_rear_link
+                                                     ├──> tof_left_link
+                                                     ├──> tof_right_link
                                                      ├──> front_left_wheel_link
                                                      ├──> front_right_wheel_link
                                                      ├──> rear_right_wheel_link
@@ -961,8 +991,14 @@ implementation.
 ## Known boundaries
 
 - The repository supports one robot without namespace isolation.
-- Ogre2 is required for usable simulated LiDAR; Ogre1 is retained only for
-  scan-independent software-rendered checks.
+- Ogre2 is required for usable simulated LiDAR and ToF; Ogre1 is retained only
+  for scan-independent software-rendered checks. The ToF case is worse than the
+  LiDAR's, because Ogre1 fails quietly rather than obviously: the clouds keep
+  their shape and their timestamps, so topic-level checks pass, but the ranges
+  are wrong. Measured against a flat floor under Ogre1 the bottom zone row read
+  89 mm where geometry demands 64 mm, and the top row pinned to the near limit
+  against nothing at all. Under Ogre2 every row lands within a millimetre of
+  prediction. Any range read off an Ogre1 run is not evidence.
 - The optional velocity smoother remains disabled pending validation of stale
   command behavior.
 - Gazebo runtime tests need isolated ROS domains/partitions and serial cleanup.
