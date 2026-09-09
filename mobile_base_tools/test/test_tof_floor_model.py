@@ -14,12 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pin the floor/obstacle/cliff decision, especially where it is asymmetric."""
+"""Pin the floor/obstacle decision, and the margins that keep it quiet."""
 
 import math
 
 from mobile_base_tools.tof_floor_model import (
-    CLIFF,
     FLOOR,
     FREE,
     OBSTACLE,
@@ -87,14 +86,13 @@ def test_a_ray_too_shallow_to_reach_the_floor_reports_none():
         (3.75, 0.50, OBSTACLE),
         (11.25, 0.30, OBSTACLE),
         # A downward ray stopping short of its floor intercept: it met the
-        # vertical face of something standing in the way.
+        # vertical face of something standing in the way. The shallow row needs
+        # to fall a long way short before it is believed - that is the price of
+        # not marking open floor, and it is paid deliberately.
         (-11.25, 0.09, OBSTACLE),
-        (-3.75, 0.30, OBSTACLE),
+        (-3.75, 0.25, OBSTACLE),
         # High enough that the robot passes underneath it.
         (18.75, 0.50, OVERHEAD),
-        # The floor has fallen away: a downward ray reaching much further.
-        (-26.25, 0.40, CLIFF),
-        (-11.25, 1.00, CLIFF),
     ],
 )
 def test_returns_are_classified_by_height_above_the_floor(
@@ -102,57 +100,12 @@ def test_returns_are_classified_by_height_above_the_floor(
     assert label_of(measured, pitch_degrees) == expected_label
 
 
-def test_missing_return_means_cliff_only_where_floor_was_expected():
-    """The asymmetry the whole module exists for.
-
-    The same absence of data is a drop from a ray aimed at reachable floor and
-    open space from any other ray. Getting this backwards either blinds the
-    robot to stairs or paints every doorway as a hole.
-    """
-    assert label_of(None, -26.25) == CLIFF
-    assert label_of(None, 3.75) == FREE
-    assert label_of(None, 26.25) == FREE
-
-
-def test_a_cliff_with_no_return_is_marked_where_the_floor_was_expected():
-    """A zone that saw nothing has no point of its own, so use the prediction.
-
-    This is the commonest cliff by far - beyond an edge the beam usually comes
-    back with nothing at all - so a classifier that could only place measured
-    points would place almost no cliffs.
-    """
-    label, point, _ = classify_zone(
-        geometry(), LEVEL, ORIGIN, ray(-26.25), None)
-    assert label == CLIFF
-    assert point[0] == pytest.approx(0.130 + 0.0573, abs=2e-3)
-    assert point[2] == pytest.approx(0.0, abs=1e-9)
-
-
-def test_a_cliff_is_marked_at_the_edge_not_where_the_beam_landed():
-    """Over a drop the ray carries on and hits the lower ground far away.
-
-    Measured on the proving ground: the shallow row leaves the deck at 436 mm
-    and strikes the floor 120 mm below it at 2.27 m. Marking that point puts
-    the lethal cell past the drop and leaves the edge itself clear, and a range
-    gate then throws the whole detection away.
-    """
-    edge = expected_floor_range(LEVEL, ORIGIN, ray(-3.75), 3.5)
-    label, point, _ = classify_zone(
-        geometry(), LEVEL, ORIGIN, ray(-3.75), 2.27)
-    assert label == CLIFF
-    marked = math.dist(ORIGIN, point)
-    assert marked == pytest.approx(edge, abs=1e-6)
-    assert marked < 0.8, 'the mark must survive the costmap range gate'
-
-
-def test_missing_return_on_an_unreachable_floor_ray_is_free_not_cliff():
-    """A ray angled so shallowly the floor is out of range proves nothing."""
-    assert label_of(None, -0.2) == FREE
-
-
-def test_non_finite_range_is_treated_as_no_return():
+def test_a_zone_that_saw_nothing_is_free():
+    """With cliff detection gone, an empty zone carries no other meaning."""
+    for pitch in (-26.25, -0.2, 3.75, 26.25):
+        assert label_of(None, pitch) == FREE
     for value in (math.inf, math.nan):
-        assert label_of(value, -26.25) == CLIFF
+        assert label_of(value, -26.25) == FREE
 
 
 def test_a_downward_ray_can_never_report_a_height_above_its_aperture():
@@ -180,28 +133,30 @@ def test_a_low_feature_near_its_floor_intercept_stays_unmarked():
     assert label_of(expected - 0.5 * settings.range_shortfall) == FLOOR
 
 
-def test_the_shortfall_threshold_grows_with_the_expected_distance():
-    """A fixed threshold is too tight on the far row, where error is largest.
+def test_the_shortfall_margin_scales_with_cotangent_of_elevation():
+    """The single fix that removed 28 false obstacles per frame.
 
-    Measured on flat deck, a fixed 30 mm let range noise on the 436 mm row
-    scatter stray obstacle marks across open floor.
+    A ray's predicted floor distance moves by cot(elevation) for every unit of
+    error in the fitted plane: 2.0 on the steepest row, 15.3 on the shallowest.
+    Measured on open floor with a flat threshold, that one shallow row produced
+    all of the false marks, every one of them 0.5-0.9 m out and within 4 mm of
+    the ground, while the steep rows were clean.
     """
     settings = geometry()
-    near = expected_floor_range(LEVEL, ORIGIN, ray(-26.25), 3.5)
-    far = expected_floor_range(LEVEL, ORIGIN, ray(-3.75), 3.5)
-    assert settings.shortfall_at(near) == pytest.approx(0.030)
-    assert settings.shortfall_at(far) > 0.040
-    # Three sigma of range noise on the far row is no longer enough to mark.
-    assert label_of(far - 0.030, -3.75) == FLOOR
-    # A real obstacle standing in the way still is.
-    assert label_of(far * 0.5, -3.75) == OBSTACLE
+    steep = expected_floor_range(LEVEL, ORIGIN, ray(-26.25), 3.5)
+    shallow = expected_floor_range(LEVEL, ORIGIN, ray(-3.75), 3.5)
 
+    # The steep row keeps the floor margin; the shallow one needs far more.
+    assert settings.shortfall_at(steep, ray(-26.25)[2]) == pytest.approx(0.030)
+    shallow_margin = settings.shortfall_at(shallow, ray(-3.75)[2])
+    assert shallow_margin > 4.0 * settings.range_shortfall
 
-def test_a_shallow_dip_is_not_a_cliff_but_a_real_drop_is():
-    # 0.087 m puts the return 10 mm below the floor, inside the tolerance;
-    # 0.330 m puts it 117 mm down, which is a step the robot would fall off.
-    assert label_of(0.087, -26.25) == FLOOR
-    assert label_of(0.330, -26.25) == CLIFF
+    # Plane error that used to mark open floor no longer does.
+    assert label_of(shallow - 0.060, -3.75) == FLOOR
+    # Something genuinely in the way still marks.
+    assert label_of(shallow * 0.5, -3.75) == OBSTACLE
+    # And the steep row keeps its millimetre sensitivity.
+    assert label_of(steep - 0.040, -26.25) == OBSTACLE
 
 
 def test_returns_inside_the_dead_zone_are_discarded():
@@ -247,20 +202,6 @@ def test_a_floor_that_is_genuinely_sloped_relative_to_the_robot_is_fitted():
     plane = fit_plane(flat_points(slope=0.10))
     assert plane.a == pytest.approx(0.10, abs=1e-6)
     assert plane.tilt() == pytest.approx(math.atan(0.10), abs=1e-6)
-
-
-def test_a_floor_offset_downward_shifts_the_plane_not_the_labels():
-    """A floor 40 mm lower than nominal is still floor once fitted."""
-    lowered = flat_points(height=-0.040)
-    # Against the nominal level plane this reads as a 40 mm drop.
-    assert classify_zone(
-        geometry(), LEVEL, ORIGIN, ray(-26.25),
-        (ORIGIN[2] + 0.040) / abs(ray(-26.25)[2]))[0] == CLIFF
-    plane = fit_plane(lowered)
-    assert plane.c == pytest.approx(-0.040, abs=1e-9)
-    distance = expected_floor_range(plane, ORIGIN, ray(-26.25), 3.5)
-    assert classify_zone(
-        geometry(), plane, ORIGIN, ray(-26.25), distance)[0] == FLOOR
 
 
 def test_an_implausibly_steep_fit_falls_back_to_level():

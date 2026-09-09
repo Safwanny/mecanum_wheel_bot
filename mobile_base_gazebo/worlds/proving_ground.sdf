@@ -47,7 +47,7 @@
         +=================================================+
         |  bars 15/30/45/60/90 mm    |  gaps .45/.38/.32   |
         |                            |              +=====+   notch: the
-        |  ramp >  [ deck ]     doorsill    overhang | lane |   cliff wraps
+        |     [ deck ]          doorsill    overhang | lane |   drop wraps
         |                            |              +=====+   an inside
         |  mezzanine 60 mm           |  thin pole          |   corner
         +=================================================+
@@ -110,19 +110,6 @@
         <visual name="visual">
           <geometry><box><size>0.1500 2.4000 0.6000</size></box></geometry>
           <material><ambient>0.10 0.20 0.65 1</ambient><diffuse>0.15 0.30 0.85 1</diffuse>
-            <specular>0.2 0.2 0.25 1</specular></material>
-        </visual>
-      </link>
-    </model>
-    <model name="ramp_to_deck">
-      <static>true</static><pose>-4.3600 0.0000 0.0600 0.000000 -0.165149 0.000000</pose>
-      <link name="link">
-        <collision name="collision">
-          <geometry><box><size>0.7299 1.2000 0.0200</size></box></geometry>
-        </collision>
-        <visual name="visual">
-          <geometry><box><size>0.7299 1.2000 0.0200</size></box></geometry>
-          <material><ambient>0.45 0.30 0.12 1</ambient><diffuse>0.75 0.52 0.22 1</diffuse>
             <specular>0.2 0.2 0.25 1</specular></material>
         </visual>
       </link>

@@ -961,87 +961,75 @@ competes for memory with the other packages and fails spuriously:
 colcon test --executor sequential && colcon test-result --verbose
 ```
 
-## The ToF perimeter and the proving ground
+## The ToF perimeter
 
 Eight VL53L7CX sensors ring the lower deck, each reporting an 8x8 grid of zones
-over a 60-degree field. They exist to see the band the LiDAR cannot: the scan
+over a 60 degree field. They exist to see the band the LiDAR cannot: the scan
 plane sits at 91.5 mm and ground clearance is 9.5 mm, so anything between those
-two heights stops the robot while being completely invisible to it. A shoe. A
-cable. A doorsill.
+two heights stops the robot while being invisible to it. A shoe. A cable. A
+doorsill.
+
+**Obstacle detection only.** Cliff detection was removed: on the geometry this
+robot has, the shallow rows could not tell a drop from an error in the fitted
+floor reliably enough to act on, and a costmap fed those mistakes trapped the
+robot behind marks it had invented.
 
 ### Run it
 
 ```bash
-ros2 launch mobile_base_bringup simulation.launch.py \
-  world:=proving_ground x:=-3.6 y:=1.8 z:=0.22 render_engine:=ogre2
+ros2 launch mobile_base_bringup simulation.launch.py world:=my_world render_engine:=ogre2
 ```
 
-`z:=0.22` is not optional in this world. The proving ground's driving surface is
-a deck raised 0.12 m off the ground plane, because a cliff cannot be a hole in
-an infinite collision plane - nothing would fall through it - so it has to be
-built as an absence of deck instead. The launch default of `z:=0.10` spawns the
-robot on the floor beside the deck rather than on it.
+`render_engine:=ogre2` is not optional. Ogre1 corrupts range data quietly -
+cloud shapes and timestamps stay valid while the numbers are wrong - so anything
+measured on an Ogre1 run is not evidence.
 
-Two launch arguments control the ring:
-
-| Argument | Default | What it does |
+| Argument | Default | Effect |
 | --- | --- | --- |
-| `tof_classifier` | `true` | Publishes the clouds the costmaps consume |
-| `tof_markers` | `true` | Draws every ray in RViz; visualisation only |
-
-Turn `tof_markers` off when you are not looking at it. It builds a marker per
-zone per frame and costs real CPU for nothing.
+| `tof_classifier` | `true` | Publishes the cloud the local costmap consumes |
+| `tof_markers` | `true` | Draws every ray in RViz. Visualisation only; turn it off when not looking |
 
 ### What to look at
 
 | Topic | Contents |
 | --- | --- |
 | `/tof/<face>/points` | Raw 8x8 grid per sensor, eight of them |
+| `/tof/obstacles` | Classified obstacles. The only ToF topic the costmap uses |
+| `/tof/floor` | Recognised floor. Wired nowhere, on purpose |
 | `/tof/rays` | Every ray drawn from minimum range to contact |
-| `/tof/obstacles` | Classified obstacles, consumed by both costmaps |
-| `/tof/cliffs` | Drop-off edges, marked lethal |
-| `/tof/floor` | Recognised floor. Deliberately wired nowhere |
 
-In the ray display, **orange means a return and blue means nothing came back**.
-That distinction is the whole design: a drop-off does not read as a long range,
-it reads as no return at all, and the classifier separates the two by which zone
-asked the question.
+In the ray display orange means a return came back and blue means nothing did.
 
-### What each proving-ground feature is for
+### Proving it works
 
-Drive to each and watch. Several are there to **fail** to trigger - a false
-positive is as much a bug as a miss.
-
-| Feature | Where | Expect |
-| --- | --- | --- |
-| Deck edges, notch | east side, x=2.80 | `/tof/cliffs` populates ~0.5 m out, tracing the edge |
-| Ramp | west, x=-4.4 | Floor stays floor. Cliffs here mean the floor fit is wrong |
-| Bars 15-90 mm | y=1.8 lane | 30 mm up appear in `/tof/obstacles`; LiDAR shows nothing |
-| 15 mm bar | x=-3.2 | Marginal by design - it sits at the edge of what is separable |
-| Doorsill 40 mm | x=-1.2 | Detected; the everyday case that strands the robot |
-| Overhang | x=1.6 | **No** obstacle cells. The robot is 99.5 mm and drives under |
-| Thin pole | x=0.4 | Detected, but bloated - a zone is 13 cm wide at 1 m |
-| Gaps .45/.38/.32 m | centre | The 0.32 m gap equals the padded footprint diameter |
-| Ledge lane | east of the wall at x=1.6 | Driving *alongside* a drop, the case forward motion cannot cover |
-| Mezzanine 60 mm | south-west | A step, not a drop - tests the cliff-depth threshold |
-
-### Checking it without RViz
+Park in a corridor in `my_world` and compare the two sensors:
 
 ```bash
-ros2 topic hz /tof/cliffs
-ros2 topic echo /tof/obstacles --field width
+ros2 topic echo /tof/obstacles --field width      # count of marked points
+ros2 topic echo /scan --field ranges | head       # what the LiDAR sees
 ```
 
-`width` is the point count. On open deck, cliffs should read 0 and obstacles
-should read 0 with nothing nearby. Anything else is a false positive and the
-thresholds need looking at.
+Measured in a corridor with walls 0.65 m either side, the ring reports about 23
+points per frame and every one of them corresponds to a wall the LiDAR also
+sees. Drive into open floor and the count should fall to near zero: **marks on
+empty floor are the failure mode to watch for**, and the thresholds are tuned so
+that the steep rows keep millimetre sensitivity while the shallow row has to
+miss its prediction by a wide margin before it is believed.
+
+To see it catch something the LiDAR cannot, put a low object in front of the
+robot in `navigation_basic` - anything between 30 and 90 mm tall. It should
+appear in `/tof/obstacles` while `/scan` shows nothing at that bearing.
 
 ### Seeing it in the costmap
 
-The costmaps only exist once navigation is running, and navigation needs a
-saved map. Map the proving ground first, exactly as for any other world - see
-*Phase 2* above - then bring up navigation against it. Until then the clouds are
-published and correct but nothing is consuming them.
+The ToF ring marks the **local** costmap only. The global costmap is in the map
+frame and never rolls, so a near-field sensor feeding it accumulates every
+transient mark for the whole run until the robot is enclosed by its own history.
+
+Costmaps only exist once navigation is running, which needs a saved map. Map
+`navigation_basic` as described under *Phase 2* above, then bring up navigation
+and enable the **Local costmap** display in RViz. Approaching a low obstacle
+should raise lethal cells where the LiDAR shows nothing.
 
 ## Inspecting a running robot
 

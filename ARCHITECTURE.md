@@ -1044,108 +1044,96 @@ anisotropic contact parameters for the selected Gazebo physics engine.
 ## The ToF perimeter
 
 Eight VL53L7CX carriers on the lower deck, apertures at 28.5 mm, each reporting
-an 8x8 zone grid over 60 x 60 degrees. Full geometry, mounting and coverage are
-in *Body geometry* above; what follows is what the numbers mean for perception.
+an 8x8 zone grid over 60 x 60 degrees. Mounting and coverage are under *Body
+geometry*; this section is what the geometry means for perception.
 
 ### Why the ring is a near-field sensor, permanently
 
-The four downward rows terminate on the floor by 435 mm. Past that, the lowest
-ray still in flight is the one at +3.75 degrees, climbing at 65.5 mm per metre:
+The four downward rows terminate on the floor by 435 mm. Past that the lowest
+ray still in flight is the one at +3.75 degrees, climbing 65.5 mm per metre, and
+it clears the robot's own 99.5 mm roof at **1.083 m**. Beyond that distance
+nothing the ring can see could obstruct this robot, and anything tall enough to
+matter also crosses the LiDAR plane where it is resolved fifteen times finer.
+Marking is gated at 0.8 m for that reason. It is a mounting-height consequence,
+not a tuning choice: 28.5 mm buys near-field floor visibility and costs
+far-field low-obstacle range, and the two are in direct tension.
 
-| Distance | Height of the lowest in-flight ray |
-| --- | --- |
-| 0.80 m | 81.0 mm |
-| 1.00 m | 94.1 mm |
-| **1.083 m** | **99.6 mm** - above the robot's own roof |
-| 1.70 m | 140.0 mm |
+### Floor sampling and why row 3 is treated differently
 
-**Beyond 1.083 m every ray clears a robot 99.5 mm tall.** Anything the ring
-could detect out there is something the robot would drive under, and anything
-tall enough to matter also crosses the LiDAR plane, where it is resolved fifteen
-times finer. That is why marking is gated at 0.8 m, and it is a mounting-height
-consequence rather than a tuning choice: 28.5 mm buys floor sensing and costs
-far-field low-obstacle sensing, and the two are in direct tension.
-
-### Floor sampling
-
-| Row | Pitch | Floor intercept | Pitch sensitivity |
+| Row | Pitch | Floor intercept | cot(elevation) |
 | --- | --- | --- | --- |
-| 0 | -26.25 deg | 57.9 mm | 2.5 mm/deg |
-| 1 | -18.75 deg | 84.1 mm | 4.8 mm/deg |
-| 2 | -11.25 deg | 143.5 mm | 13.1 mm/deg |
-| 3 | -3.75 deg | 435.5 mm | **116.5 mm/deg** |
+| 0 | -26.25 deg | 57.9 mm | 2.0 |
+| 1 | -18.75 deg | 84.1 mm | 2.9 |
+| 2 | -11.25 deg | 143.5 mm | 5.0 |
+| 3 | -3.75 deg | 435.5 mm | **15.3** |
 
-Rows 0-2 fit the floor. Row 3 is excluded from the fit: with the longest lever
-arm and 46x the sensitivity, an equal-weight fit would hand the noisiest sample
-the most authority.
-
-Row 2 is the working cliff detector. At 143.5 mm it leaves about 70 mm of margin
-over the stopping distance at 0.30 m/s. The bound that follows - 0.44 m/s on row
-2, 0.32 m/s on row 1 - is asserted against MPPI's `vx_max` in
-`test_navigation_config.py`.
+Rows 0-2 fit the floor plane. Row 3 is excluded from the fit and heavily
+derated in the classifier, and the cotangent column is why: a ray's predicted
+floor distance moves by `cot(elevation)` for every unit of error in the fitted
+plane, so row 3 is seven times more sensitive to plane error than row 0.
 
 ### Classification
 
-The floor is fitted from the sensors every frame, not assumed level and not
-taken from the IMU. An IMU reports attitude against gravity, but what decides
-whether a return is floor is attitude against *the floor*, and the two disagree
-exactly where it matters: on a steady ramp the robot and the surface tilt
-together, so in the robot's own frame nothing has moved. Subtracting IMU pitch
-there would paint the whole ramp as a drop-off. The EKF could not help either -
-it runs in `two_d_mode`, which forces pitch and roll to zero.
+The floor is **fitted from the sensors** every frame, pooling the steep near
+rows of all eight. Measured on a level floor the fit lands within 0.2 mm of
+zero at 0.07 degrees of tilt. It is not taken from the IMU: on a slope the robot
+and the surface tilt together, so in the robot's own frame the floor has not
+moved, and a gravity-referenced attitude would report a slope that is not there.
+The EKF could not supply it either - it runs in `two_d_mode`, which forces pitch
+and roll to zero.
 
 Two tests then decide each zone, and both are needed:
 
-- **Height above the fitted floor.** Above the threshold is an obstacle, below
-  is a drop, above the robot's roof is clearance.
-- **Range shortfall.** A ray that was going to meet the floor and stopped short
-  hit something standing in between. This is the only test that catches a low
-  obstacle's vertical face, because a downward ray can never report a height
-  above the aperture it left - on height alone the four downward rows would be
-  blind to obstacles entirely.
+- **Height above the fitted plane.** Above `obstacle_min_height` is an obstacle;
+  above the robot's roof is clearance it drives under.
+- **Range shortfall**, with a margin scaling as `expected * cot(elevation)`. A
+  ray that was going to meet the floor and stopped short hit something standing
+  in between. This is the only test that catches a low obstacle's vertical face,
+  because a downward ray can never report a height above the aperture it left.
 
-The shortfall threshold scales with the expected distance. A fixed 30 mm is
-three sigma of range noise against the near rows' 60-150 mm intercepts but only
-marginal against row 3's 436 mm, and measured on flat deck it left a scatter of
-stray marks from that row alone.
+The cotangent scaling is the difference between the ring working and not.
+Measured on open floor with a flat threshold, row 3 alone produced **28 false
+obstacles per frame**, every one of them 0.5-0.9 m out and within 4 mm of the
+ground, while rows 0-2 were clean. Scaling the margin by cot removed all of
+them without touching the steep rows' sensitivity.
 
-### The asymmetry that makes cliffs detectable
+### Stability
 
-A zone returning nothing means opposite things depending on where it pointed:
+A zone must read as an obstacle for `confirm_frames` consecutive frames before
+it is published, and is held for `hold_frames` after it stops. Consecutive
+frames originally agreed on only 38 percent of their marks; a costmap fed that
+churn accumulates the union of every transient mark. Positions are additionally
+low-pass filtered, because 10 mm of range noise moves a mark about a centimetre
+per frame even when the zone is steadily looking at the same wall.
 
-| No return from | Means |
-| --- | --- |
-| a ray aimed at floor it could reach | **cliff** |
-| any other ray | free space |
+### Costmap coupling
 
-That cannot be decided from a point cloud, only from the zone's identity, which
-is why classification happens on the organised grid and upstream of the costmap.
+The ring marks the **local costmap only**. The global costmap lives in the map
+frame and never rolls, so a near-field sensor feeding it accumulates marks for
+the whole run and the robot ends up enclosed by its own history.
 
-Cliffs are marked **where the floor was expected**, not where the beam landed.
-Over an edge the ray carries on: measured on the proving ground, the shallow row
-leaves the deck at 436 mm and strikes the ground 120 mm below at 2.27 m. Marking
-that point puts the lethal cell past the drop, leaves the edge clear, and a range
-gate then discards the detection entirely.
+### What was removed, and why
 
-Cliff points are then lifted to `cliff_mark_height` so the costmap's height
-filter keeps them. A point down in a hole is below any sane threshold and would
-be dropped; lifted, the costmap treats the hole exactly like a wall.
+**Cliff detection.** The design was sound - a missing return from a ray aimed at
+reachable floor means the floor is gone - but the geometry does not support it
+here. The rows with the reach to see an edge early are the shallow ones, and
+those are exactly the rows whose predicted floor distance is least trustworthy.
+The result marked open floor as often as it marked edges, and a costmap treating
+those as lethal trapped the robot. Reinstating it needs dedicated downward
+sensors at near-normal incidence, not shallow rays from a 28.5 mm aperture.
+
+**The proving ground ramp.** With 9.5 mm of ground clearance the robot grounds
+on the lip at both ends, so it only ever demonstrated that it could get stuck.
 
 ### Limits worth stating
 
 - **Simulation flatters this badly.** Gazebo returns a perfect reflection from
-  every surface. A real VL53L7CX on dark carpet at 26 degrees returns nothing,
-  which this classifier reads as *cliff*. The first hardware test will be a
-  false-positive storm, not a silent failure, and nothing in simulation can
-  validate otherwise.
-- **The floor patches are not continuous.** Adjacent sensors' near-field patches
-  leave 60-106 mm lateral gaps. Forward motion sweeps them into parallel lines,
-  so an edge across the path is caught by every patch - but an edge running
-  *parallel* to travel can sit in a gap indefinitely. The proving ground's ledge
-  lane exists to make that visible, not to fix it.
-- **Cliffs are forgotten when they leave view**, because clearing is left on.
-  The robot avoids the cliffs it can currently see. This is a reactive layer,
-  not a safety system.
+  every surface. A real VL53L7CX on dark carpet at a shallow angle returns
+  nothing at all. Nothing in simulation can validate behaviour on real
+  materials.
+- **Detection range is short and deliberately so.** The shallow row's margin is
+  wide enough that it will not mark a low obstacle until the robot is close.
+  That is the price of not marking open floor, and it was paid knowingly.
 
 ## Validation boundaries
 
@@ -1228,8 +1216,8 @@ Earlier contact experiments and their measurements are historical evidence in
 | Change robot geometry | `mobile_base_description/urdf/properties.xacro`, then controller/evaluator constants and `test_mecanum_wheels.py` |
 | Change contact physics | `mobile_base_bringup/scripts/generate_sim_sdf.py`, then `test_mecanum_wheel_contact.py` |
 | Add a sensor | description Xacro + Gazebo Xacro + bridge + timestamp contract + sensor test |
-| Change what the ToF ring marks | `tof_floor_model.py` thresholds + `test_tof_floor_model.py` + the costmap sources |
-| Test perception behaviour | `world:=proving_ground z:=0.22`, see [docs/GUIDE.md](docs/GUIDE.md) |
+| Change what the ToF ring marks | `tof_floor_model.py` thresholds + `test_tof_floor_model.py` + the local costmap source |
+| Test perception behaviour | `world:=my_world`, see [docs/GUIDE.md](docs/GUIDE.md) |
 | Change TF ownership | simulation spawners + EKF config + TF validator tests |
 | Add a motion profile | `mobile_base_tools/config/odometry_tests.yaml` |
 | Change costmap or planner tuning | `mobile_base_navigation/config/`, then `test_navigation_config.py`; iterate with `planning_harness.launch.py` |

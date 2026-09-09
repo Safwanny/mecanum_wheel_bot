@@ -25,7 +25,7 @@ local_costmap:
         # ObstacleLayer, not VoxelLayer: one planar LiDAR, no 3D sensor.
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
-        observation_sources: scan tof_obstacles tof_cliffs
+        observation_sources: scan tof_obstacles
         scan:
           topic: /scan
           data_type: LaserScan
@@ -54,20 +54,6 @@ local_costmap:
           # Past 1.083 m every ray in the ring clears that roof, so nothing
           # beyond it could be an obstacle to this robot. Marking further would
           # only add 22 cm blobs where the LiDAR already resolves 0.5 degrees.
-          obstacle_max_range: 0.8
-          obstacle_min_range: 0.0
-          raytrace_max_range: 1.0
-          raytrace_min_range: 0.0
-        # A drop-off published as a wall. The points are lifted off the floor
-        # by the classifier so this height band keeps them; a point left down
-        # in the hole would be filtered away and the robot would drive in.
-        tof_cliffs:
-          topic: /tof/cliffs
-          data_type: PointCloud2
-          clearing: true
-          marking: true
-          min_obstacle_height: 0.0
-          max_obstacle_height: 0.12
           obstacle_max_range: 0.8
           obstacle_min_range: 0.0
           raytrace_max_range: 1.0

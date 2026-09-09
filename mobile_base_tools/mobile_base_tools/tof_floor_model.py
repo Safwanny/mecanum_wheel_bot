@@ -14,59 +14,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Decide what each ToF zone is looking at: floor, obstacle, or a drop.
+"""Decide whether each ToF zone is looking at the floor or at an obstacle.
 
-The whole design turns on one asymmetry. A zone that returns nothing means
-opposite things depending on where it was pointed:
+The ring exists to see the band the LiDAR cannot: the scan plane sits at 91.5 mm
+and ground clearance is 9.5 mm, so anything between them stops the robot while
+being wholly invisible to it. A shoe, a cable, a doorsill.
 
-  - a ray angled at the floor, whose intercept is close enough to reach,
-    returning nothing means the floor is not there any more. That is a cliff.
-  - a ray pointed at open space returning nothing means open space.
+Two tests decide it, and both are needed.
 
-Neither the range nor the point tells you which case you are in. Only the zone's
-own direction does, which is why classification happens here, on the organised
-grid, and not downstream in a costmap that has already thrown the grid away.
+**Height above the floor.** ``z_hit = origin.z + range * direction.z``, measured
+against a plane fitted from the sensors themselves rather than assumed level.
+Above a threshold is an obstacle; above the robot's own roof is clearance it
+drives under.
 
-Most of the rest falls out of a single quantity: the height of the return above
-the floor the robot is standing on.
+**Range shortfall.** A ray that was going to meet the floor and stopped short of
+it hit something standing in between. This is the only test that catches a low
+obstacle's vertical face, because a downward ray can never report a height above
+the aperture it left - on height alone the downward rows would be blind to
+obstacles entirely.
 
-    z_hit = aperture_height + range * direction.z
+The shortfall threshold scales with ``cot(elevation)``, and that is the whole
+difference between this working and not. The predicted floor distance for a ray
+at elevation ``theta`` moves by ``cot(theta)`` for every unit of error in the
+fitted plane: 2.0 for the steepest row, but 15.3 for the shallowest. Measured on
+open floor with a fixed threshold, that one row produced 28 false obstacles per
+frame, all of them at 0.5-0.9 m and all sitting within 4 mm of the ground. Every
+other row was clean. Scaling by cot means the shallow row must miss its
+prediction by a wide margin before anything is marked, while the steep rows keep
+their millimetre sensitivity.
 
-Above the floor by enough is an obstacle. Below it by enough is a drop. Near
-zero is floor. Above the robot's own roof is something it drives under, which is
-not an obstacle at all.
+The floor is fitted, not assumed. On a slope the robot and the surface tilt
+together, so in the robot's own frame the floor has not moved; a gravity
+referenced attitude would report a slope that is not there.
 
-Height alone is not sufficient, and the reason is worth stating because it is
-easy to miss. A ray angled downward can never report a height above the aperture
-it left - 28.5 mm on this robot - so a low bar's vertical face always reads as
-near-floor no matter how tall the bar is. On height alone, the four downward
-rows could only ever say floor or cliff, and obstacles would be left to the
-upward rows, which do not reach low objects until the robot is almost touching
-them.
-
-So a second test runs alongside: a ray that was going to meet the floor at a
-known distance, and stopped measurably short of it, hit something standing in
-between. That catches the vertical faces the height test cannot, and it is what
-makes the downward rows useful for obstacles rather than only for floor.
-
-The floor those heights are measured from is fitted from the sensors, not
-assumed level and not taken from the IMU. That choice matters more than it
-looks. An IMU reports attitude against gravity, but what decides whether a
-return is floor is attitude against *the floor*, and the two disagree exactly
-where it counts: on a steady ramp the robot is tilted and the ramp is tilted
-with it, so in the robot's own frame nothing has moved at all. Subtracting IMU
-pitch there would tilt the model away from a surface that never went anywhere
-and paint the whole ramp as a drop-off.
-
-Fitting instead from the steep near rows - the ones that reach the floor within
-150 mm and move only 2.5 to 13 mm per degree - gives a reference that is right
-on a ramp, right under acceleration, and right on a floor that is simply not
-where the model said it was. It is also self-correcting: the measurement that
-defines the floor is the same measurement being classified against it.
-
-This module holds no ROS. It takes geometry and ranges and returns labels, so
-the interesting cases - a cliff at the edge of range, a ramp, a floor that is
-not level - can be tested at a desk without a simulator.
+This module holds no ROS, so the interesting cases can be tested at a desk.
 """
 
 import math
@@ -74,7 +55,6 @@ import math
 
 FLOOR = 'floor'
 OBSTACLE = 'obstacle'
-CLIFF = 'cliff'
 OVERHEAD = 'overhead'
 FREE = 'free'
 
@@ -96,36 +76,38 @@ class FloorGeometry:
     than this are genuinely below the noise floor, and the honest response is to
     say so rather than to lower the threshold and mark the floor.
 
-    ``cliff_min_depth`` 0.030 m distinguishes a drop worth stopping for from a
-    dip in the floor.
-
-    ``range_shortfall`` 0.030 m is how much closer than the expected floor a
-    return must be before it counts as something standing in the way, and
-    ``shortfall_fraction`` 0.10 adds a term proportional to how far away that
-    floor was. The proportional part is not decoration: a fixed threshold is
-    three sigma of range noise against the near rows' 60-150 mm intercepts but
-    only marginal against the shallow row's 436 mm, where the pitch error is
-    also largest. Measured on flat deck, a fixed 30 mm left a scatter of stray
-    marks from the far row alone.
+    ``range_shortfall`` 0.030 m is the floor on how much closer than the
+    predicted floor a return must be to count as an obstacle, and
+    ``plane_angle_tolerance`` 1.2 degrees is what that grows by on shallow rays.
+    The predicted distance moves by cot(elevation) per unit of plane error, so
+    the shallowest row needs a margin an order of magnitude wider than the
+    steepest before anything it reports can be believed.
     """
 
     def __init__(self, robot_height=0.0995, floor_tolerance=0.020,
-                 obstacle_min_height=0.025, cliff_min_depth=0.030,
-                 range_shortfall=0.030, shortfall_fraction=0.10,
+                 obstacle_min_height=0.025, range_shortfall=0.030,
+                 plane_angle_tolerance=math.radians(1.2),
                  max_range=3.5, min_range=0.02):
         self.robot_height = robot_height
         self.floor_tolerance = floor_tolerance
         self.obstacle_min_height = obstacle_min_height
-        self.cliff_min_depth = cliff_min_depth
         self.range_shortfall = range_shortfall
-        self.shortfall_fraction = shortfall_fraction
+        self.plane_angle_tolerance = plane_angle_tolerance
         self.max_range = max_range
         self.min_range = min_range
 
-    def shortfall_at(self, expected):
-        """How much short of ``expected`` counts as something in the way."""
+    def shortfall_at(self, expected, direction_z):
+        """How much short of ``expected`` counts as something in the way.
+
+        Grows with cot(elevation): a shallow ray's predicted floor distance is
+        far more sensitive to error in the fitted plane than a steep one's, so
+        it has to miss by much more before it is believed.
+        """
+        sine = min(1.0, max(1e-6, abs(direction_z)))
+        cotangent = math.sqrt(max(0.0, 1.0 - sine * sine)) / sine
         return max(
-            self.range_shortfall, self.shortfall_fraction * expected)
+            self.range_shortfall,
+            expected * cotangent * self.plane_angle_tolerance)
 
 
 class FloorPlane:
@@ -269,11 +251,9 @@ def classify_zone(geometry, plane, origin, direction, measured_range):
         )
 
     if measured_range is None or not math.isfinite(measured_range):
-        # The asymmetry this module exists for. A ray aimed at reachable floor
-        # that saw nothing is a drop; a ray aimed anywhere else is open space.
-        if expected is None:
-            return FREE, None, None
-        return CLIFF, along(expected), None
+        # Nothing came back. Without cliff detection there is nothing to
+        # infer from that: an empty zone is simply empty.
+        return FREE, None, None
 
     if measured_range <= geometry.min_range:
         return FREE, None, None
@@ -285,25 +265,17 @@ def classify_zone(geometry, plane, origin, direction, measured_range):
         return OVERHEAD, point, residual
     if residual > geometry.obstacle_min_height:
         return OBSTACLE, point, residual
-    if (expected is not None
-            and measured_range < expected - geometry.shortfall_at(expected)):
+    if (expected is not None and measured_range
+            < expected - geometry.shortfall_at(expected, direction[2])):
         # The ray was going to meet the floor and stopped short, so something
         # is standing in between. This is the only test that catches a low
         # obstacle's vertical face: a downward ray cannot report a height above
         # the aperture it left, so on height alone every such face reads as
         # floor however tall the object behind it is.
         return OBSTACLE, point, residual
-    if residual < -geometry.cliff_min_depth:
-        # Marked where the floor should have been, not where the beam finally
-        # landed. Over an edge the ray carries on and can strike the lower
-        # ground metres away; that point is past the drop and marking it would
-        # put the lethal cell somewhere the robot was never going to be, while
-        # leaving the edge itself clear.
-        return CLIFF, (along(expected) if expected is not None else point), \
-            residual
-    # Anything left is floor, including returns between the floor band and the
-    # obstacle threshold: real, but too small to separate from the floor, so
-    # reported as floor rather than marked.
+    # Anything left is floor, including returns below the floor and those
+    # between the floor band and the obstacle threshold: real, but too small to
+    # separate from the floor, so reported as floor rather than marked.
     return FLOOR, point, residual
 
 

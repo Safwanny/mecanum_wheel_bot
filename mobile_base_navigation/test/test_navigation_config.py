@@ -36,12 +36,12 @@ LIDAR_MAX_RANGE = 4.0
 # robot's own 99.5 mm roof. Nothing marked further out could obstruct it, and
 # the LiDAR already resolves that range 15x finer.
 TOF_MAX_RANGE = 1.083
-TOF_SOURCES = ('tof_obstacles', 'tof_cliffs')
+TOF_SOURCES = ('tof_obstacles',)
 
-# Fastest the robot may travel and still stop on a cliff seen by the second
-# floor row, which lands 143.5 mm ahead: 0.1 s of latency plus v^2/2a at
-# 1.0 m/s^2 must fit inside that. The first row, at 84.1 mm, gives 0.32 m/s.
-CLIFF_SAFE_LINEAR = 0.44
+# Fastest the robot may travel and still stop on an obstacle first seen by the
+# second floor row, which lands 143.5 mm ahead: 0.1 s of latency plus v^2/2a at
+# 1.0 m/s^2 must fit inside that.
+TOF_SAFE_LINEAR = 0.44
 
 # The chain is connected, so the safety property is no longer "nobody names
 # this topic" but the single-arbiter invariant: exactly one node publishes to
@@ -204,12 +204,19 @@ def main():
 
     # Sensor ranges stay inside each sensor's own maximum, and raytracing
     # reaches slightly past marking so free space clears properly.
+    # The ToF ring marks the local costmap only. The global costmap does not
+    # roll, so a near-field sensor feeding it accumulates every transient mark
+    # for the whole run until the robot is enclosed by its own history.
+    assert global_costmap['obstacle_layer'][
+        'observation_sources'].split() == ['scan']
+    assert local_costmap['obstacle_layer'][
+        'observation_sources'].split() == ['scan'] + list(TOF_SOURCES)
+
     for costmap in (global_costmap, local_costmap):
         layer = costmap['obstacle_layer']
         # Space separated, not a YAML list. collision_monitor.yaml uses a list
         # for the same key and the two forms are not interchangeable.
         sources = layer['observation_sources'].split()
-        assert sources == ['scan'] + list(TOF_SOURCES)
         for name in sources:
             source = layer[name]
             assert source['raytrace_max_range'] > source['obstacle_max_range']
@@ -224,7 +231,7 @@ def main():
         # The ToF sources carry pre-classified points: the floor is filtered
         # out upstream, so these must never be asked to do it with a height
         # cut, and they must stay inside the geometric ceiling.
-        for name in TOF_SOURCES:
+        for name in [n for n in sources if n in TOF_SOURCES]:
             source = layer[name]
             assert source['topic'] == f'/{name.replace("_", "/", 1)}'
             assert source['data_type'] == 'PointCloud2'
@@ -331,9 +338,9 @@ def main():
     assert follow_path['vy_max'] <= VALIDATED_LINEAR * ENVELOPE_MULTIPLE
     assert follow_path['wz_max'] <= VALIDATED_ANGULAR * ENVELOPE_MULTIPLE
 
-    # Fast enough to outrun the cliff detection and the ring is decoration.
-    assert follow_path['vx_max'] <= CLIFF_SAFE_LINEAR
-    assert follow_path['vy_max'] <= CLIFF_SAFE_LINEAR
+    # Fast enough to outrun the ToF ring and it is decoration.
+    assert follow_path['vx_max'] <= TOF_SAFE_LINEAR
+    assert follow_path['vy_max'] <= TOF_SAFE_LINEAR
 
     # PreferForwardCritic penalises the lateral and reverse motion a mecanum
     # base exists to use.

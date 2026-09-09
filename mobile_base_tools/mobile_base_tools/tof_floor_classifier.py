@@ -14,33 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Turn eight ToF zone grids into the two clouds a costmap should mark.
+"""Turn eight ToF zone grids into the obstacle cloud a costmap should mark.
 
 The costmap must never see the floor. Every sensor in the ring is aimed partly
-at the ground on purpose - that is how it detects drop-offs at all - so feeding
-the raw clouds to a costmap paints the floor lethal and the robot walls itself
-in behind its own returns. The usual defence is a ``min_obstacle_height`` cut in
-the costmap, but that is a blunt slice in z: the moment the floor is not where
-the slice assumes, phantom obstacles appear ahead of the robot.
+at the ground, so feeding the raw clouds to a costmap paints the floor lethal
+and the robot walls itself in behind its own returns. The usual defence is a
+``min_obstacle_height`` cut in the costmap, but that is a blunt slice in z: the
+moment the floor is not where the slice assumes, phantom obstacles appear.
+Classifying here means the floor never enters the costmap at all.
 
-Classifying here instead means the floor never enters the costmap at all, and
-the same fitted-floor model that rejects the floor is the one that finds the
-cliffs, so it costs nothing extra.
+Two things keep it steady, and both were added after watching it misbehave.
 
-Every frame, the steep near rows from all eight sensors are pooled and a plane
-is fitted through them; everything else is then classified against that plane.
-Fitting rather than assuming is what lets the ring work on a ramp, where the
-robot and the surface are tilted together and an IMU would report a slope that,
-in the robot's own frame, is not there.
+**The floor is fitted every frame** from the steep near rows of all eight
+sensors pooled together. One sensor's three rows span 150 mm and would fit a
+plane badly; the ring pins the tilt in both axes.
 
-Three clouds come out. ``obstacles`` and ``cliffs`` are for the costmap;
-``floor`` is for looking at and is deliberately wired nowhere.
-
-Cliff points are placed where the floor was expected and then lifted to obstacle
-height. That looks like a fudge in a diff, so: a costmap filters observations by
-height, and a point sitting in a hole is below any sane threshold and would be
-discarded. Lifting it into the marking band makes the costmap treat the hole
-exactly like a wall, which is the behaviour wanted.
+**A zone must be seen repeatedly before it is published, and survives a few
+missed frames after.** Measured on open floor, consecutive frames agreed on only
+38 percent of their obstacle points - the marks appeared and vanished from one
+frame to the next, and a costmap fed that flicker accumulates the union of every
+spurious mark and boxes the robot in. Requiring agreement across frames costs
+about 130 ms of lag and removes almost all of it, because noise does not repeat
+in the same zone while a real obstacle does.
 """
 
 import math
@@ -55,7 +50,6 @@ from std_msgs.msg import Header
 import tf2_ros
 
 from mobile_base_tools.tof_floor_model import (
-    CLIFF,
     FLOOR,
     OBSTACLE,
     FloorGeometry,
@@ -130,14 +124,21 @@ class ToFFloorClassifier(Node):
         self.declare_parameter('robot_height', 0.0995)
         self.declare_parameter('floor_tolerance', 0.020)
         self.declare_parameter('obstacle_min_height', 0.025)
-        self.declare_parameter('cliff_min_depth', 0.030)
         self.declare_parameter('range_shortfall', 0.030)
-        self.declare_parameter('shortfall_fraction', 0.10)
+        self.declare_parameter(
+            'plane_angle_tolerance', math.radians(1.2))
+        # A zone must be seen this many frames running before it is
+        # published, and is held for this many after it stops being seen.
+        self.declare_parameter('confirm_frames', 2)
+        self.declare_parameter('hold_frames', 4)
+        # How much of each new reading to accept. Range noise moves a mark
+        # about a centimetre frame to frame even when the zone is steadily
+        # looking at the same wall, which reads as shimmer.
+        self.declare_parameter('position_smoothing', 0.25)
         # Rows that feed the floor fit: the steep ones, which reach the floor
         # within 150 mm and shift 2.5-13 mm per degree of attitude error. Row 3
         # shifts 116 and is deliberately excluded.
         self.declare_parameter('floor_rows', [0, 1, 2])
-        self.declare_parameter('cliff_mark_height', 0.050)
         self.declare_parameter('publish_rate', 15.0)
         self.declare_parameter('publish_floor', True)
 
@@ -151,7 +152,6 @@ class ToFFloorClassifier(Node):
         self.directions = zone_directions(
             self.zones, field_of_view / 2.0 - zone_angle / 2.0)
         self.floor_rows = set(self.get_parameter('floor_rows').value)
-        self.cliff_mark_height = self.get_parameter('cliff_mark_height').value
         self.mark_max_range = self.get_parameter('mark_max_range').value
         self.publish_floor = self.get_parameter('publish_floor').value
 
@@ -160,10 +160,9 @@ class ToFFloorClassifier(Node):
             floor_tolerance=self.get_parameter('floor_tolerance').value,
             obstacle_min_height=self.get_parameter(
                 'obstacle_min_height').value,
-            cliff_min_depth=self.get_parameter('cliff_min_depth').value,
             range_shortfall=self.get_parameter('range_shortfall').value,
-            shortfall_fraction=self.get_parameter(
-                'shortfall_fraction').value,
+            plane_angle_tolerance=self.get_parameter(
+                'plane_angle_tolerance').value,
             max_range=self.get_parameter('max_range').value,
             min_range=self.get_parameter('min_range').value,
         )
@@ -189,10 +188,17 @@ class ToFFloorClassifier(Node):
             for face in self.faces
         }
 
+        self.confirm_frames = self.get_parameter('confirm_frames').value
+        self.hold_frames = self.get_parameter('hold_frames').value
+        self.smoothing = self.get_parameter('position_smoothing').value
+        # (face, zone) -> [score, last point]. Score rises while a zone reads as
+        # an obstacle and falls when it does not; a zone is published once the
+        # score reaches confirm_frames and keeps being published until it falls
+        # back below, which is what stops the marks flickering.
+        self.tracked = {}
+
         self.obstacle_publisher = self.create_publisher(
             PointCloud2, '/tof/obstacles', 5)
-        self.cliff_publisher = self.create_publisher(
-            PointCloud2, '/tof/cliffs', 5)
         self.floor_publisher = self.create_publisher(
             PointCloud2, '/tof/floor', 5)
 
@@ -234,13 +240,18 @@ class ToFFloorClassifier(Node):
         return ranges
 
     def observations(self):
-        """Resolve every sensor that currently has both data and a transform."""
+        """Yield (face, origin, directions, ranges) for every ready sensor.
+
+        The face name is carried through because the obstacle tracker keys on
+        it: a zone has to be identifiable frame to frame for repeated sightings
+        to mean anything.
+        """
         for face, message in self.latest.items():
             placed = self.placement(face)
             if placed is None:
                 continue
             origin, directions = placed
-            yield origin, directions, self.zone_ranges(message)
+            yield face, origin, directions, self.zone_ranges(message)
 
     def publish(self):
         if not self.latest:
@@ -253,17 +264,17 @@ class ToFFloorClassifier(Node):
         # three rows span 150 mm and would fit a plane badly; eight sensors'
         # worth ring the robot and pin the tilt in both axes.
         candidates = []
-        for origin, directions, ranges in resolved:
+        for _, origin, directions, ranges in resolved:
             candidates.extend(floor_candidates(
                 origin, directions, ranges, self.floor_rows, self.zones,
                 self.geometry.max_range))
         plane = fit_plane(candidates)
 
-        obstacles = []
-        cliffs = []
+        seen = set()
         floor = []
-        for origin, directions, ranges in resolved:
-            for direction, measured in zip(directions, ranges):
+        for face, origin, directions, ranges in resolved:
+            for index, (direction, measured) in enumerate(
+                    zip(directions, ranges)):
                 label, point, _ = classify_zone(
                     self.geometry, plane, origin, direction, measured)
                 if point is None:
@@ -271,20 +282,33 @@ class ToFFloorClassifier(Node):
                 if math.dist(origin, point) > self.mark_max_range:
                     continue
                 if label == OBSTACLE:
-                    obstacles.append(point)
-                elif label == CLIFF:
-                    # Lifted into the costmap's marking band; see the module
-                    # docstring for why a hole is published as a wall.
-                    cliffs.append(
-                        (point[0], point[1], self.cliff_mark_height))
+                    key = (face, index)
+                    seen.add(key)
+                    score, previous = self.tracked.get(key, (0, None))
+                    if previous is not None:
+                        blend = self.smoothing
+                        point = tuple(
+                            blend * new + (1.0 - blend) * old
+                            for new, old in zip(point, previous))
+                    self.tracked[key] = (
+                        min(score + 1, self.hold_frames), point)
                 elif label == FLOOR and self.publish_floor:
                     floor.append(point)
+
+        obstacles = []
+        for key, (score, point) in list(self.tracked.items()):
+            if key not in seen:
+                score -= 1
+                if score <= 0:
+                    del self.tracked[key]
+                    continue
+                self.tracked[key] = (score, point)
+            if score >= self.confirm_frames:
+                obstacles.append(point)
 
         stamp = self.get_clock().now().to_msg()
         self.obstacle_publisher.publish(
             make_cloud(self.base_frame, stamp, obstacles))
-        self.cliff_publisher.publish(
-            make_cloud(self.base_frame, stamp, cliffs))
         if self.publish_floor:
             self.floor_publisher.publish(
                 make_cloud(self.base_frame, stamp, floor))
