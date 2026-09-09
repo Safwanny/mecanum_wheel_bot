@@ -100,21 +100,32 @@ class FloorGeometry:
     dip in the floor.
 
     ``range_shortfall`` 0.030 m is how much closer than the expected floor a
-    return must be before it counts as something standing in the way. It has to
-    clear range noise and the pitch error in the expected distance, and the
-    shallow rows carry most of that error, so this is the loosest of the four.
+    return must be before it counts as something standing in the way, and
+    ``shortfall_fraction`` 0.10 adds a term proportional to how far away that
+    floor was. The proportional part is not decoration: a fixed threshold is
+    three sigma of range noise against the near rows' 60-150 mm intercepts but
+    only marginal against the shallow row's 436 mm, where the pitch error is
+    also largest. Measured on flat deck, a fixed 30 mm left a scatter of stray
+    marks from the far row alone.
     """
 
     def __init__(self, robot_height=0.0995, floor_tolerance=0.020,
                  obstacle_min_height=0.025, cliff_min_depth=0.030,
-                 range_shortfall=0.030, max_range=3.5, min_range=0.02):
+                 range_shortfall=0.030, shortfall_fraction=0.10,
+                 max_range=3.5, min_range=0.02):
         self.robot_height = robot_height
         self.floor_tolerance = floor_tolerance
         self.obstacle_min_height = obstacle_min_height
         self.cliff_min_depth = cliff_min_depth
         self.range_shortfall = range_shortfall
+        self.shortfall_fraction = shortfall_fraction
         self.max_range = max_range
         self.min_range = min_range
+
+    def shortfall_at(self, expected):
+        """How much short of ``expected`` counts as something in the way."""
+        return max(
+            self.range_shortfall, self.shortfall_fraction * expected)
 
 
 class FloorPlane:
@@ -275,7 +286,7 @@ def classify_zone(geometry, plane, origin, direction, measured_range):
     if residual > geometry.obstacle_min_height:
         return OBSTACLE, point, residual
     if (expected is not None
-            and measured_range < expected - geometry.range_shortfall):
+            and measured_range < expected - geometry.shortfall_at(expected)):
         # The ray was going to meet the floor and stopped short, so something
         # is standing in between. This is the only test that catches a low
         # obstacle's vertical face: a downward ray cannot report a height above
@@ -283,7 +294,13 @@ def classify_zone(geometry, plane, origin, direction, measured_range):
         # floor however tall the object behind it is.
         return OBSTACLE, point, residual
     if residual < -geometry.cliff_min_depth:
-        return CLIFF, point, residual
+        # Marked where the floor should have been, not where the beam finally
+        # landed. Over an edge the ray carries on and can strike the lower
+        # ground metres away; that point is past the drop and marking it would
+        # put the lethal cell somewhere the robot was never going to be, while
+        # leaving the edge itself clear.
+        return CLIFF, (along(expected) if expected is not None else point), \
+            residual
     # Anything left is floor, including returns between the floor band and the
     # obstacle threshold: real, but too small to separate from the floor, so
     # reported as floor rather than marked.

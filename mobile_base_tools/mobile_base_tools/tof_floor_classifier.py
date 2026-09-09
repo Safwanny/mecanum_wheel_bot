@@ -132,6 +132,7 @@ class ToFFloorClassifier(Node):
         self.declare_parameter('obstacle_min_height', 0.025)
         self.declare_parameter('cliff_min_depth', 0.030)
         self.declare_parameter('range_shortfall', 0.030)
+        self.declare_parameter('shortfall_fraction', 0.10)
         # Rows that feed the floor fit: the steep ones, which reach the floor
         # within 150 mm and shift 2.5-13 mm per degree of attitude error. Row 3
         # shifts 116 and is deliberately excluded.
@@ -161,6 +162,8 @@ class ToFFloorClassifier(Node):
                 'obstacle_min_height').value,
             cliff_min_depth=self.get_parameter('cliff_min_depth').value,
             range_shortfall=self.get_parameter('range_shortfall').value,
+            shortfall_fraction=self.get_parameter(
+                'shortfall_fraction').value,
             max_range=self.get_parameter('max_range').value,
             min_range=self.get_parameter('min_range').value,
         )

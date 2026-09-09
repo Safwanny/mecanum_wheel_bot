@@ -128,6 +128,23 @@ def test_a_cliff_with_no_return_is_marked_where_the_floor_was_expected():
     assert point[2] == pytest.approx(0.0, abs=1e-9)
 
 
+def test_a_cliff_is_marked_at_the_edge_not_where_the_beam_landed():
+    """Over a drop the ray carries on and hits the lower ground far away.
+
+    Measured on the proving ground: the shallow row leaves the deck at 436 mm
+    and strikes the floor 120 mm below it at 2.27 m. Marking that point puts
+    the lethal cell past the drop and leaves the edge itself clear, and a range
+    gate then throws the whole detection away.
+    """
+    edge = expected_floor_range(LEVEL, ORIGIN, ray(-3.75), 3.5)
+    label, point, _ = classify_zone(
+        geometry(), LEVEL, ORIGIN, ray(-3.75), 2.27)
+    assert label == CLIFF
+    marked = math.dist(ORIGIN, point)
+    assert marked == pytest.approx(edge, abs=1e-6)
+    assert marked < 0.8, 'the mark must survive the costmap range gate'
+
+
 def test_missing_return_on_an_unreachable_floor_ray_is_free_not_cliff():
     """A ray angled so shallowly the floor is out of range proves nothing."""
     assert label_of(None, -0.2) == FREE
@@ -161,6 +178,23 @@ def test_a_low_feature_near_its_floor_intercept_stays_unmarked():
         expected - 0.5 * settings.range_shortfall)
     assert 0.0 < residual < settings.obstacle_min_height
     assert label_of(expected - 0.5 * settings.range_shortfall) == FLOOR
+
+
+def test_the_shortfall_threshold_grows_with_the_expected_distance():
+    """A fixed threshold is too tight on the far row, where error is largest.
+
+    Measured on flat deck, a fixed 30 mm let range noise on the 436 mm row
+    scatter stray obstacle marks across open floor.
+    """
+    settings = geometry()
+    near = expected_floor_range(LEVEL, ORIGIN, ray(-26.25), 3.5)
+    far = expected_floor_range(LEVEL, ORIGIN, ray(-3.75), 3.5)
+    assert settings.shortfall_at(near) == pytest.approx(0.030)
+    assert settings.shortfall_at(far) > 0.040
+    # Three sigma of range noise on the far row is no longer enough to mark.
+    assert label_of(far - 0.030, -3.75) == FLOOR
+    # A real obstacle standing in the way still is.
+    assert label_of(far * 0.5, -3.75) == OBSTACLE
 
 
 def test_a_shallow_dip_is_not_a_cliff_but_a_real_drop_is():
