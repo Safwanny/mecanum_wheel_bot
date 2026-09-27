@@ -66,6 +66,9 @@ def generate_launch_description():
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
                 'motion_profile': LaunchConfiguration('motion_profile'),
+                # The live SLAM map first, costmaps faint or off.
+                'rviz_config': PathJoinSubstitution(
+                    [share, 'rviz', 'explore.rviz']),
             }.items(),
         ),
         # DistBug as the fallback: it listens on its own goal topic, so RViz

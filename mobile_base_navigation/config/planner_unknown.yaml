@@ -1,8 +1,30 @@
-# Overlay for localization:=slam. The map is being built as the robot drives,
-# so most of it is unknown at first; refusing unknown cells would leave the
-# planner nothing to plan through. It plans through them as if free and
-# replans as the LiDAR fills them in. Applies to either planner profile.
+# Overlay for localization:=slam, loaded last on planner_server.
+
+# The map is being built as the robot drives, so most of it is unknown at
+# first; refusing unknown cells would leave the planner nothing to plan
+# through. It plans through them as if free and replans as the LiDAR fills
+# them in. Applies to either planner profile.
 planner_server:
   ros__parameters:
     GridBased:
       allow_unknown: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      # A static global costmap is resized to the map, and a live SLAM map
+      # only covers what has been seen: a goal in an unseen room was off the
+      # costmap entirely and the planner refused it before allow_unknown
+      # could matter. A rolling window larger than the building keeps every
+      # reachable goal on it; the static layer copies the growing map in.
+      rolling_window: true
+      width: 20
+      height: 20
+      inflation_layer:
+        # Measured across the 0.70 m bedroom door of my_world: the LiDAR
+        # smears a door jamb seen at a grazing angle ~15 cm into the opening,
+        # and with a scaling factor of 3 only a sliver of the rest stayed
+        # below cost 65. A steeper fall-off keeps contact forbidden
+        # (robot_radius is untouched) but makes a doorway's centre line cheap,
+        # so the planner goes through doors instead of around the building.
+        cost_scaling_factor: 8.0

@@ -61,6 +61,9 @@ def generate_launch_description():
                 'init_pose_from_topic': '',
                 'freq': 10.0,
             }],
+            # rf2o logs every scan at INFO and warns between scans; that
+            # buried every other node's output in the launch log.
+            ros_arguments=['--log-level', 'error'],
             condition=IfCondition(LaunchConfiguration('laser_odometry')),
         ),
         Node(

@@ -49,6 +49,9 @@ PATTERNS = (
     'ros2 launch',
     'ros2cli.daemon',
     'ros2_ws/install/mobile_base',
+    # Third-party nodes from mobile_base.repos.
+    'install/rf2o_laser_odometry',
+    'install/explore_lite',
     'launch_params_',
     'ros_gz',
     'rviz2',
