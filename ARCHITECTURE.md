@@ -1054,7 +1054,7 @@ ray still in flight is the one at +3.75 degrees, climbing 65.5 mm per metre, and
 it clears the robot's own 99.5 mm roof at **1.083 m**. Beyond that distance
 nothing the ring can see could obstruct this robot, and anything tall enough to
 matter also crosses the LiDAR plane where it is resolved fifteen times finer.
-Marking is gated at 0.8 m for that reason. It is a mounting-height consequence,
+Marking ranges follow from it (see *Marking by class*). It is a mounting-height consequence,
 not a tuning choice: 28.5 mm buys near-field floor visibility and costs
 far-field low-obstacle range, and the two are in direct tension.
 
@@ -1097,6 +1097,25 @@ obstacles per frame**, every one of them 0.5-0.9 m out and within 4 mm of the
 ground, while rows 0-2 were clean. Scaling the margin by cot removed all of
 them without touching the steep rows' sensitivity.
 
+### Marking by class
+
+`select_marks` in `tof_floor_model.py` gives each kind of return its own range,
+measured horizontally from the sensor:
+
+| Kind | How it is recognised | Marked to |
+| --- | --- | --- |
+| Low obstacle | Range shortfall only, at most `obstacle_min_height` above the floor | 0.4 m |
+| Obstacle | Above `obstacle_min_height`, below the roof | 1.0 m |
+| Wall | A column of upward zones at one distance, starting from the lowest upward row | 2.0 m, any height |
+
+The wall rule is also what keeps overhangs out: a table top returns only in the
+upper rows while the lowest upward row sees past it, so it is never marked.
+Everything the classifier still publishes above the roof is wall, which is why
+the costmap's ToF source has no low height cut (`max_obstacle_height: 1.2`).
+
+The classifier also publishes `/tof/obstacle_zones`, a `UInt8MultiArray` mask
+with one row per face, so displays can colour exactly the zones it marked.
+
 ### Stability
 
 A zone must read as an obstacle for `confirm_frames` consecutive frames before
@@ -1105,6 +1124,35 @@ frames originally agreed on only 38 percent of their marks; a costmap fed that
 churn accumulates the union of every transient mark. Positions are additionally
 low-pass filtered, because 10 mm of range noise moves a mark about a centimetre
 per frame even when the zone is steadily looking at the same wall.
+
+### Sensor power
+
+The Gazebo bridge publishes the LiDAR and every ToF sensor under
+`/sensors/raw`. `sensor_power` relays the enabled ones, still serialized, onto
+`/scan` and `/tof/<face>/points`, so nothing downstream knows switches exist. A
+switched-off sensor goes silent as unpowered hardware would, and one empty
+message is published so RViz and the classifier drop its last frame. Switches
+are the boolean parameters `enabled.<sensor>`; state and measured rates go out
+on `/sensors/status` as diagnostics. `sensor_panel` is the window that drives
+them. Gazebo still renders a switched-off sensor, so switching off does not
+speed the simulation up.
+
+### Scene shapes and colours
+
+`tof_scene_shapes` turns `/tof/obstacles` and `/tof/floor` into `/tof/shapes`:
+clusters are split at corners into straight runs, long thin runs become wall
+slabs, the rest object boxes, and collinear wall pieces split at a sensor seam
+are joined again. The floor is one region, the furthest confirmed floor per
+7.5° bearing bin, smoothed over time. Shapes are tracked across frames like
+zones are.
+
+`tof_palette.py` holds every ToF colour. Colour carries meaning, never sensor
+identity: slate for raw returns and rays, green for floor, and warning bands
+for obstacles by distance (red < 0.25 m, amber < 0.5 m, blue beyond). A ray
+turns orange only when the classifier marked its zone.
+
+A known weakness: a wall seen at a grazing angle is sampled in columns up to
+0.8 m apart along its length, and those can be drawn as separate tall pieces.
 
 ### Costmap coupling
 

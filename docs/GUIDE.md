@@ -1059,6 +1059,12 @@ measured on an Ogre1 run is not evidence.
 | --- | --- | --- |
 | `tof_classifier` | `true` | Publishes the cloud the local costmap consumes |
 | `tof_markers` | `true` | Draws every ray in RViz. Visualisation only; turn it off when not looking |
+| `tof_shapes` | `true` | Draws walls, objects and the floor region (needs the classifier) |
+| `sensor_panel` | `true` | Opens the sensor power window |
+| `gui` | `true` | The Gazebo window. It slows the sim to about 27 % of real time on an integrated GPU; `gui:=false` keeps it near 95 % and RViz shows everything anyway |
+
+To start next to a wall, add a spawn pose, e.g. `world:=navigation_basic
+x:=1.05 y:=1.0 gui:=false`.
 
 ### What to look at
 
@@ -1067,9 +1073,52 @@ measured on an Ogre1 run is not evidence.
 | `/tof/<face>/points` | Raw 8x8 grid per sensor, eight of them |
 | `/tof/obstacles` | Classified obstacles. The only ToF topic the costmap uses |
 | `/tof/floor` | Recognised floor. Wired nowhere, on purpose |
-| `/tof/rays` | Every ray drawn from minimum range to contact |
+| `/tof/rays` | Every ray, plus a marker where a classified obstacle was hit |
+| `/tof/shapes` | Walls, objects and the floor region |
+| `/tof/obstacle_zones` | Which zones of each sensor are marked obstacles |
+| `/sensors/status` | Per-sensor on/off and measured rate |
 
-In the ray display orange means a return came back and blue means nothing did.
+### Reading the display
+
+Everything ToF sits in the **ToF ring** folder in RViz, and colour always means
+the same thing whichever sensor drew it:
+
+| Colour | Meaning |
+| --- | --- |
+| Faint slate | Raw returns and rays. Background only |
+| Orange ray and dot | A zone the classifier marked as an obstacle |
+| Green region | Floor confirmed around the robot |
+| Red / amber / blue shape | Wall or object under 0.25 m / under 0.5 m / further |
+| Red outline, "OFF" | A sensor switched off |
+
+Labels such as `WALL 0.42 m | h>=76 mm` give the distance and the height the
+ring actually saw, which is a lower bound.
+
+### Marking ranges
+
+| Kind | Marked to |
+| --- | --- |
+| Low obstacle (caught by the floor shortfall test) | 0.4 m |
+| Obstacle, 25 mm up to the roof | 1.0 m |
+| Wall (a column of zones at one distance) | 2.0 m |
+
+Low-obstacle detection has not been proven yet; the bars in `proving_ground`
+(15-90 mm) are the test for it.
+
+### Switching sensors off
+
+The **Sensor power** window shows the robot front-up with every field of view
+to scale and a switch on each sensor. The same switches from a terminal:
+
+```bash
+ros2 param set /sensor_power enabled.front false
+ros2 param set /sensor_power enabled.lidar false   # SLAM and Nav2 stop updating
+ros2 topic echo /sensors/status
+```
+
+A switched-off sensor goes silent and its data disappears from RViz, the
+classifier and the costmap. Gazebo still renders it, so the sim does not get
+faster.
 
 ### Proving it works
 

@@ -87,7 +87,7 @@ localization.
 | Layer | Sensor | Range | Job |
 | --- | --- | --- | --- |
 | **Mapping** | 360° planar LiDAR | 4.0 m | SLAM, localization, long-range planning |
-| **Near field** | 8 × VL53L7CX ToF | 0.8 m | The 82 mm blind band, all round |
+| **Near field** | 8 × VL53L7CX ToF | 0.4 / 1.0 / 2.0 m | Low obstacles / obstacles / walls, all round |
 | **Attitude** | IMU | — | Yaw fusion for odometry |
 | **Inspection** | RGB camera | — | Human situational awareness |
 
@@ -97,6 +97,9 @@ an 8 × 8 grid of ranges over a 60° field. Eight fans at 45° spacing cover the
 full circle with 15° of overlap at every seam, which matters for a holonomic
 base: it can strafe or move diagonally at any moment, so there is no "forward"
 to point a sensor at.
+
+Each sensor can be switched off from a panel, and RViz draws what the ring
+sees as translucent walls, objects and one floor region around the robot.
 
 They sit at 28.5 mm and are aimed partly at the floor on purpose. That is a
 deliberate trade with a hard consequence — see *Findings* below.
@@ -295,6 +298,21 @@ The ToF apertures sit at 28.5 mm. Their downward rows reach the floor within
 buys near-field floor visibility and costs far-field low-obstacle range, and no
 amount of software changes it — the ring is a near-field sensor permanently.
 
+### One range for everything was wrong
+
+Different rows see different things, so each kind gets its own marking range.
+Low obstacles are caught only by the downward rows, which meet the floor by
+0.435 m, so they stop at **0.4 m**. Taller obstacles are seen by the +3.75°
+row until it clears the roof at 1.083 m, so **1.0 m**. A wall fills a whole
+column of upward zones at one distance, which proves it stands on the floor
+however far away it is, so walls are marked to **2.0 m**. A single 0.8 m limit
+was too far for the first and too short for the last.
+
+Tilting the sensors so one row is exactly level looks attractive and works in
+simulation, where zones are thin rays. Real zones are 7.5° cones, so a level
+row's lower half meets the floor from 0.435 m anyway, and the tilt costs half
+the low-obstacle range. The sensors stay level.
+
 ### One trigonometric term decided whether it worked
 
 A ray's predicted floor distance moves by `cot(elevation)` for every unit of
@@ -345,7 +363,7 @@ emergency stop.
 | **1** | Mecanum simulation and control, wheel odometry, IMU fusion, TF ownership, timestamp contracts |
 | **2** | SLAM Toolbox mapping, map serving, AMCL localization |
 | **3** | Nav2 costmaps, global planning, command arbitration, e-stop, autonomous driving |
-| **4** | ToF perimeter: eight-sensor ring, floor/obstacle classification, local costmap integration |
+| **4** | ToF perimeter: eight-sensor ring, floor/obstacle classification by class and range, scene shapes, per-sensor power switches, local costmap integration |
 
 Two motion profiles are available: `primitive` turns to face each leg before
 driving it, and `holonomic` blends translation and rotation freely. Details in
@@ -361,6 +379,9 @@ upper bound.
 
 ## Goals
 
+- **Next** — ToF-only navigation: a Bug2 navigator that uses the base's
+  holonomic motion to follow walls without turning, and a speed governor that
+  slows in steps as walls and obstacles close in along the direction of travel.
 - **Near term** — commission the ToF ring on hardware, per-sensor diagnostics,
   a calibration procedure, and an MCU-side reflex stop independent of the ROS
   graph.
