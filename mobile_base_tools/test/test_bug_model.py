@@ -21,7 +21,8 @@ import math
 import pytest
 
 from mobile_base_tools.bug_model import (
-    ARRIVED, CAUTION, CRAWL, CRUISE, SLOW, STOP, UNREACHABLE,
+    ARRIVED, CAUTION, CRAWL, CRUISE, RECOVERING, SLOW, STOP, STUCK,
+    UNREACHABLE,
     Bug2, SpeedLevels, body_support, corridor_distance, slowest,
     side_clearance, split_walls, stopping_speed)
 
@@ -235,3 +236,63 @@ def test_distbug_still_reports_an_enclosed_goal_unreachable():
     box = (1.0, -0.6, 2.0, 0.6)
     state, _ = run(Bug2(speed=0.3), (0.0, 0.0, 0.0), (1.5, 0.0), (box,))
     assert state == UNREACHABLE
+
+
+
+def test_a_stall_backs_off_then_gives_up_as_stuck():
+    # Commands go out but the robot never moves: a governor pinned at STOP.
+    bug = Bug2(speed=0.3, stall_time=1.0, max_recoveries=2)
+    pose = (0.0, 0.0, 0.0)
+    bug.set_goal(pose, (3.0, 0.0))
+    seen = set()
+    for _ in range(2000):
+        bug.step(pose, [])
+        seen.add(bug.state)
+        if bug.state == STUCK:
+            break
+    assert RECOVERING in seen
+    assert bug.state == STUCK
+
+
+def test_a_recovery_backs_away_from_the_last_motion():
+    bug = Bug2(speed=0.4, stall_time=1.0)
+    pose = (0.0, 0.0, 0.0)
+    bug.set_goal(pose, (3.0, 0.0))
+    velocity = (0.0, 0.0)
+    for _ in range(200):
+        velocity = bug.step(pose, [])
+        if bug.state == RECOVERING:
+            break
+    assert bug.state == RECOVERING
+    assert velocity[0] < 0.0          # it was driving +x; it backs off -x
+
+
+def test_bug_escapes_a_u_shaped_trap():
+    # The robot starts inside a U whose closed end faces the goal.
+    trap = ((1.0, -0.8, 1.2, 0.8),     # closed end, between robot and goal
+            (-0.6, 0.8, 1.2, 1.0),     # upper arm
+            (-0.6, -1.0, 1.2, -0.8))   # lower arm
+    state, length = run(Bug2(speed=0.3), (0.0, 0.0, 0.0), (3.0, 0.0), trap,
+                        steps=6000)
+    assert state == ARRIVED
+    assert length < 15.0
+
+
+def test_circling_flips_side_before_declaring_unreachable():
+    box = (1.0, -0.6, 2.0, 0.6)
+    bug = Bug2(speed=0.3)
+    state, _ = run(bug, (0.0, 0.0, 0.0), (1.5, 0.0), (box,), steps=8000)
+    assert state == UNREACHABLE
+    assert bug.flipped
+
+
+def test_leaving_needs_to_beat_the_best_distance_of_the_whole_trip():
+    bug = Bug2()
+    bug.set_goal((0.0, 0.0, 0.0), (5.0, 0.0))
+    bug.closest = 2.0                  # it has been 2 m from the goal before
+    # Here 3 m away with 0.9 m clear toward it: would end 2.1 m away.
+    assert not bug.may_leave((2.0, 0.0), 3.0, 0.9)
+    # With 1.0 m clear it would end at 2.0 m - not better by a step either.
+    assert not bug.may_leave((2.0, 0.0), 3.0, 1.0)
+    # Close enough that the goal is in clear view: always leave.
+    assert bug.may_leave((4.2, 0.0), 0.8, 1.0)

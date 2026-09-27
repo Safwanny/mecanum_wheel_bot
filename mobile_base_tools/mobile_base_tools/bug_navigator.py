@@ -38,7 +38,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from mobile_base_tools import tof_palette as palette
 from mobile_base_tools.bug_model import (
-    ARRIVED, FOLLOW, GO_TO_GOAL, UNREACHABLE, Bug2)
+    ARRIVED, DRIVING, STUCK, UNREACHABLE, Bug2)
 
 
 def yaw_of(q):
@@ -76,6 +76,7 @@ class BugNavigator(Node):
             goal_tolerance=get('goal_tolerance').value,
             line_tolerance=get('line_tolerance').value,
             side=get('side').value, algorithm=get('algorithm').value,
+            dt=1.0 / get('rate').value,
             sense_range=get('sense_range').value)
         self.heading_gain = get('heading_gain').value
 
@@ -138,8 +139,7 @@ class BugNavigator(Node):
         vx, vy = self.bug.step(self.pose, self.points)
         # Silent unless driving, so teleop on the same input is not fought;
         # one zero goes out on the cycle a run ends, to stop the wheels.
-        driving = self.bug.state in (GO_TO_GOAL, FOLLOW)
-        if not driving and was not in (GO_TO_GOAL, FOLLOW):
+        if self.bug.state not in DRIVING and was not in DRIVING:
             return
         spin = 0.0
         if self.heading is not None and (vx or vy):
@@ -156,8 +156,8 @@ class BugNavigator(Node):
         self.state_publisher.publish(String(data=state))
         if state != self.reported:
             self.reported = state
-            log = self.get_logger().warn if state == UNREACHABLE else \
-                self.get_logger().info
+            log = self.get_logger().warn if state in (
+                UNREACHABLE, STUCK) else self.get_logger().info
             log('state: ' + state)
         if self.bug.goal is not None:
             self.marker_publisher.publish(self.markers())

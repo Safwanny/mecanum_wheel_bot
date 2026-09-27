@@ -46,6 +46,22 @@ as the free range the ring reports toward the goal, ``F``, makes
 than anywhere so far - or the goal itself is in clear view. Bug2's m-line
 rule is kept as ``algorithm='bug2'`` for comparison.
 
+**Deadlock guards.** A bug algorithm is complete on paper and stalls in
+practice, so ``step`` wraps it:
+
+- *Stall watchdog*: commanding motion but moving under ``stall_distance`` in
+  ``stall_time`` (the governor pinned at STOP, a squeeze it cannot pass) ->
+  RECOVERING: back off ``backoff`` opposite the last motion, then resume.
+- *Guaranteed progress*: DistBug leaves a boundary only when the run would
+  beat the best distance to the goal of the *whole* trip by ``step``, so
+  leave/re-hit cannot ping-pong forever.
+- *Circling*: back at the hit point, the follow side flips once and it goes
+  round the other way; back again means UNREACHABLE.
+- *Corner jitter*: the direction reversing repeatedly within a couple of
+  seconds holds the previous direction for ``hold_time``.
+- *Give up*: after ``max_recoveries`` recoveries it stops as STUCK instead of
+  looping.
+
 The standoff adapts to the space. With the far side open the robot keeps a
 comfortable ``standoff`` from the wall it follows; as the far side closes in -
 a corridor, a gap - it moves towards the middle, down to ``min_standoff``. It
@@ -63,6 +79,9 @@ LEVELS = (STOP, CRAWL, SLOW, CAUTION, CRUISE)  # slowest first
 
 GO_TO_GOAL, FOLLOW, ARRIVED, UNREACHABLE, IDLE = (
     'go_to_goal', 'follow_boundary', 'arrived', 'unreachable', 'idle')
+RECOVERING, STUCK = 'recovering', 'stuck'
+DRIVING = (GO_TO_GOAL, FOLLOW, RECOVERING)
+FINISHED = (ARRIVED, UNREACHABLE, STUCK)
 
 
 def body_support(ux, uy):
@@ -232,7 +251,9 @@ class Bug2:
                  goal_tolerance=0.10, line_tolerance=0.05, leave_gain=0.10,
                  gain=2.0, follow_range=0.8, side='left',
                  contact_window=math.radians(100.0), algorithm='distbug',
-                 sense_range=1.0, step=0.10):
+                 sense_range=1.0, step=0.10, dt=0.05, stall_time=5.0,
+                 stall_distance=0.05, backoff=0.20, max_recoveries=3,
+                 hold_time=1.0):
         self.speed = speed
         self.standoff = standoff
         self.min_standoff = min_standoff
@@ -250,6 +271,13 @@ class Bug2:
         self.sense_range = sense_range
         self.step_length = step
         self.closest = math.inf
+        self.dt = dt
+        self.stall_ticks = int(round(stall_time / dt))
+        self.stall_distance = stall_distance
+        self.backoff = backoff
+        self.max_recoveries = max_recoveries
+        self.hold_ticks = int(round(hold_time / dt))
+        self.reset_guards()
         # Body-frame direction to the boundary being followed. Heading is held
         # constant, so the body frame does not rotate under it.
         self.contact = None
@@ -258,11 +286,24 @@ class Bug2:
         self.hit_to_goal = math.inf
         self.left_hit = False
 
+    def reset_guards(self):
+        self.track = []            # (tick, x, y) while commanding motion
+        self.tick = 0
+        self.recoveries = 0
+        self.resume = None         # state to return to after RECOVERING
+        self.backing = None        # (start x, start y, body vx, vy)
+        self.flipped = False
+        self.last_velocity = (0.0, 0.0)
+        self.reversals = []        # ticks at which the direction reversed
+        self.holding = 0
+
     def set_goal(self, pose, goal):
         """Start a new run from ``pose`` (x, y, yaw) to ``goal`` (x, y)."""
         self.start, self.goal = (pose[0], pose[1]), goal
         self.state = GO_TO_GOAL
         self.hit = None
+        self.closest = self.to_goal(pose)
+        self.reset_guards()
 
     def to_goal(self, pose):
         return math.hypot(self.goal[0] - pose[0], self.goal[1] - pose[1])
@@ -270,8 +311,78 @@ class Bug2:
     def step(self, pose, points):
         """One cycle: (vx, vy) in the body frame for ``pose`` and ``points``.
 
-        ``points`` are obstacle points in the body frame.
+        ``points`` are obstacle points in the body frame. The algorithm runs
+        inside the deadlock guards described in the module docstring.
         """
+        if self.state not in DRIVING:
+            return 0.0, 0.0
+        self.tick += 1
+        if self.state == RECOVERING:
+            return self.back_off(pose)
+        vx, vy = self.navigate(pose, points)
+        if self.state not in DRIVING:
+            return vx, vy
+        vx, vy = self.steady(vx, vy)
+        if self.stalled(pose, vx, vy):
+            self.recoveries += 1
+            if self.recoveries > self.max_recoveries:
+                self.state = STUCK
+                return 0.0, 0.0
+            self.resume, self.state = self.state, RECOVERING
+            lvx, lvy = self.last_velocity
+            norm = math.hypot(lvx, lvy) or 1.0
+            self.backing = (pose[0], pose[1], -lvx / norm, -lvy / norm)
+            return self.back_off(pose)
+        if vx or vy:
+            self.last_velocity = (vx, vy)
+        return vx, vy
+
+    def stalled(self, pose, vx, vy):
+        """Commanding motion for stall_time without covering stall_distance."""
+        if not (vx or vy):
+            self.track = []
+            return False
+        self.track.append((self.tick, pose[0], pose[1]))
+        while self.track and self.tick - self.track[0][0] > self.stall_ticks:
+            self.track.pop(0)
+        if self.tick - self.track[0][0] < self.stall_ticks:
+            return False
+        moved = math.hypot(pose[0] - self.track[0][1],
+                           pose[1] - self.track[0][2])
+        if moved < self.stall_distance:
+            self.track = []
+            return True
+        return False
+
+    def back_off(self, pose):
+        """Retreat ``backoff`` along the reverse of the last motion."""
+        x0, y0, bx, by = self.backing
+        if (math.hypot(pose[0] - x0, pose[1] - y0) >= self.backoff
+                or self.tick % (2 * self.stall_ticks) == 0):
+            # Done, or the way back is blocked too: resume either way; the
+            # watchdog counts it if nothing changes.
+            self.state, self.backing, self.track = self.resume, None, []
+            return 0.0, 0.0
+        return 0.5 * self.speed * bx, 0.5 * self.speed * by
+
+    def steady(self, vx, vy):
+        """Hold the previous direction when it keeps flipping (corners)."""
+        lvx, lvy = self.last_velocity
+        if self.holding > 0:
+            self.holding -= 1
+            return lvx, lvy
+        if lvx * vx + lvy * vy < -0.5 * math.hypot(lvx, lvy) * math.hypot(
+                vx, vy):
+            self.reversals = [t for t in self.reversals
+                              if self.tick - t <= 2 * self.hold_ticks]
+            self.reversals.append(self.tick)
+            if len(self.reversals) >= 4:
+                self.holding, self.reversals = self.hold_ticks, []
+                return lvx, lvy
+        return vx, vy
+
+    def navigate(self, pose, points):
+        """The bug algorithm itself, one cycle, no guards."""
         if self.state in (IDLE, ARRIVED, UNREACHABLE):
             return 0.0, 0.0
         if self.to_goal(pose) <= self.goal_tolerance:
@@ -284,13 +395,13 @@ class Bug2:
         ahead = corridor_distance(points, gx, gy)
 
         if self.state == GO_TO_GOAL:
+            self.closest = min(self.closest, self.to_goal(pose))
             if ahead > self.hit_distance:
                 return self.speed * gx, self.speed * gy
             self.state = FOLLOW
             self.contact = (gx, gy)
             self.hit = (pose[0], pose[1])
             self.hit_to_goal = self.to_goal(pose)
-            self.closest = self.hit_to_goal
             self.left_hit = False
 
         # FOLLOW
@@ -298,6 +409,8 @@ class Bug2:
         if not self.left_hit and math.dist(here, self.hit) > 0.3:
             self.left_hit = True
         distance = self.to_goal(pose)
+        # Best over the whole trip, never reset at a hit: every leave must
+        # beat it by `step`, so leaving and re-hitting cannot cycle.
         self.closest = min(self.closest, distance)
         # Leave only down a swath as wide as the standoff: the narrow corridor
         # that lets the robot through a gap would let it clip a corner here.
@@ -307,8 +420,11 @@ class Bug2:
             self.state = GO_TO_GOAL
             return self.speed * gx, self.speed * gy
         if self.left_hit and math.dist(here, self.hit) < 0.15:
-            self.state = UNREACHABLE
-            return 0.0, 0.0
+            if self.flipped:
+                self.state = UNREACHABLE
+                return 0.0, 0.0
+            # Once round without a way off: try the other way round.
+            self.flipped, self.turn, self.left_hit = True, -self.turn, False
 
         # Only points on the side already being followed: within
         # contact_window of the last direction to the boundary. At a wall end

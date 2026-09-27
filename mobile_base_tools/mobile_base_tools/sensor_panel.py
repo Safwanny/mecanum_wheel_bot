@@ -408,7 +408,10 @@ class SensorPanel(QWidget):
             ' font: bold 12pt; padding: 6px 28px; }}'.format(colour))
 
     def on_state(self, message):
-        self.telemetry.set('state', message.data.replace('_', ' ').upper())
+        colour = {'stuck': palette.CRITICAL, 'unreachable': palette.CRITICAL,
+                  'recovering': palette.CAUTION}.get(message.data, TEXT.name())
+        self.telemetry.set(
+            'state', message.data.replace('_', ' ').upper(), colour)
 
     def on_goal(self, message):
         self.goal = (message.pose.position.x, message.pose.position.y)
