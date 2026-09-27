@@ -1180,6 +1180,40 @@ sensors at near-normal incidence, not shallow rays from a 28.5 mm aperture.
   wide enough that it will not mark a low obstacle until the robot is close.
   That is the price of not marking open floor, and it was paid knowingly.
 
+## ToF-only navigation
+
+`bug_navigation.launch.py` runs the simulation with the LiDAR switched off
+plus two nodes; no map, SLAM or Nav2.
+
+```
+/goal_pose, /odometry/filtered, /tof/obstacles
+        -> bug_navigator --/governor/cmd_vel--> speed_governor
+        --/mobile_base/cmd_vel--> velocity_smoother -> mobile_base_controller
+```
+
+The logic is ROS-free in `bug_model.py` and tested on a kinematic robot.
+
+**Navigator.** Heading is held; it only translates. Motion to goal until the
+body's swept corridor is blocked within `hit_distance`; then boundary following
+by a vector field - tangent to the nearest point of the followed boundary plus
+a pull toward a standoff. Only points within 100° of the last contact
+direction count, which keeps it on one boundary round a wall end. The standoff
+is `standoff` (0.30 m) with the far side open and half the available space as
+it narrows, never below `min_standoff` (0.05 m). DistBug leaves when
+`d(x, goal) - F <= d_min - step` or the goal is in view, F being the free range
+toward the goal down a swath as wide as the standoff, capped at the 1.0 m
+obstacle marking range - an empty corridor means nothing seen, not nothing
+there. Bug2's m-line rule is kept behind `algorithm: bug2`.
+
+**Governor.** Caps translation by level for the nearest wall and the nearest
+other obstacle in the swept corridor, and for the gap beside the body. Walls
+are told apart by the classifier's wall rule: anything above the roof is wall,
+so a point sharing a column with one is wall too. Levels satisfy
+`2 (v t + v^2 / 2a) <= d - 0.05` at the near edge of each band (t = 0.35 s,
+a = 1.0 m/s^2). No ToF data for 0.5 s stops the robot. The STOP latch
+(`/speed_governor/stop`) holds its output at zero; `/speed_governor/status`
+reports level, cause and the nearest obstacle for the panel.
+
 ## Validation boundaries
 
 Static description tests enforce four wheel links/joints, four motor links on

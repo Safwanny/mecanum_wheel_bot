@@ -30,6 +30,7 @@ ros2 run mobile_base_tools stop_simulation
 | [6](#part-6--repeatable-motion-checks) | Open-loop motion accuracy checks |
 | [7](#part-7--the-tof-perimeter) | The ToF ring: running it, proving it works |
 | [8](#part-8--inspecting-a-running-robot) | Introspecting frames, topics, parameters |
+| [9](#part-9--tof-only-navigation) | Driving to a goal on the ToF ring alone: DistBug, speed levels, the control panel |
 
 ---
 
@@ -1318,4 +1319,99 @@ ros2 bag record /tf /tf_static /scan /odometry/filtered /amcl_pose /mobile_base_
 Bags default to MCAP on Jazzy.
 
 ---
+
+---
+
+## Part 9 — ToF-only navigation
+
+Drive to a goal with **no map, no SLAM, no Nav2 and the LiDAR switched off**:
+odometry for position, the ToF ring for everything else. The navigator is a
+holonomic DistBug; every command it sends passes through a speed governor that
+caps it by what the ring sees along the direction of travel.
+
+### Run it
+
+```bash
+ros2 launch mobile_base_bringup bug_navigation.launch.py world:=navigation_basic
+```
+
+Then give a goal with **2D Goal Pose** in RViz, or from a terminal:
+
+```bash
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: odom}, pose: {position: {x: 3.0, y: 1.0}, orientation: {w: 1.0}}}"
+```
+
+The launch file turns the velocity smoother on (the governor's speeds assume
+its braking limits) and the Gazebo window off. Add `gui:=true` for the window;
+the sim then runs at about a quarter of real time.
+
+| Goal from the origin in `navigation_basic` | What it exercises |
+| --- | --- |
+| `3.0, 1.0` | Meet the interior wall, follow it, round its end, leave early |
+| `2.5, -3.0` | Past the south-east box |
+| `-3.3, 3.0` | Behind the north-west box |
+| `1.5, 1.0` | Inside the interior wall - should end UNREACHABLE |
+
+### What the robot does
+
+- **Heading is held.** It never turns; it slides in whatever direction it needs.
+- **Going to the goal** it moves straight at it. When the corridor its body
+  would sweep is blocked within 0.35 m, it starts following that boundary.
+- **Following** it keeps **0.30 m** from the boundary when the far side is open
+  and takes the middle of the space as it narrows, down to **0.05 m**, so it
+  squeezes through gaps it fits and keeps its distance where there is room.
+  It follows only the boundary it met, so a wall end is rounded rather than
+  swapped for the next wall.
+- **Leaving (DistBug)**: as soon as a clear run toward the goal, down a swath
+  0.30 m either side of the body, would end closer to the goal than anywhere it
+  has been since meeting the obstacle - or the goal is in clear view.
+- **Unreachable**: back where it met the obstacle without having left it.
+
+`algorithm: bug2` in `mobile_base_tools/config/bug_navigation.yaml` switches to
+Bug2's m-line leaving rule for comparison.
+
+### Speed levels
+
+Each level's speed stops the robot, with a factor-2 margin, inside its band:
+`2 (v t + v^2 / 2a) <= d - 0.05` with t = 0.35 s and a = 1.0 m/s^2. Distances
+are from the body, **along the direction of travel only** - a wall beside the
+robot while it slides along it does not slow it.
+
+| Level | Trigger | Speed |
+| --- | --- | --- |
+| CRUISE | nothing within 1.0 m ahead, walls beyond 0.65 m | 0.50 m/s |
+| CAUTION | obstacle 0.4-1.0 m ahead, or wall 0.4-0.65 m | 0.33 m/s |
+| SLOW | anything 0.25-0.4 m ahead, or under 15 cm beside the body | 0.20 m/s |
+| CRAWL | 0.12-0.25 m ahead, or under 6 cm beside | 0.10 m/s |
+| STOP | under 0.12 m ahead, no ToF data for 0.5 s, or the STOP button | 0 |
+
+Levels drop at once and climb one step per 0.5 s, so a start from rest takes
+about two seconds to reach cruise. The speeds assume 1.0 m/s^2 of braking;
+measure it on hardware and retune in `bug_navigation.yaml`.
+
+### The control panel
+
+| Row | Readouts |
+| --- | --- |
+| Motion | Speed, body velocity, heading, odometry position |
+| Safety | Speed level and cap, what limits it, nearest obstacle distance and bearing (0° front, + left), navigator state |
+| Localisation | EKF 1σ position and heading uncertainty, wheel-only vs fused pose gap, distance to goal |
+
+**STOP** latches every autonomous command at zero until **RELEASE**. It stops
+what passes through the governor; it is not a hardware e-stop. The same from a
+terminal:
+
+```bash
+ros2 service call /speed_governor/stop std_srvs/srv/SetBool "{data: true}"
+```
+
+A growing *wheel vs fused* gap means the wheels slipped or the IMU is
+correcting them; without a map, odometry is the only position there is.
+
+### Limits
+
+- Odometry drifts, and nothing corrects it: long runs end centimetres off.
+- The ring sees low obstacles to 0.4 m only; behind the robot's current
+  direction it relies on the fans overlapping.
+- A bug algorithm has no memory of places: in a maze it can take long detours.
 

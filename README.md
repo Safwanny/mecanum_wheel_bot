@@ -364,6 +364,7 @@ emergency stop.
 | **2** | SLAM Toolbox mapping, map serving, AMCL localization |
 | **3** | Nav2 costmaps, global planning, command arbitration, e-stop, autonomous driving |
 | **4** | ToF perimeter: eight-sensor ring, floor/obstacle classification by class and range, scene shapes, per-sensor power switches, local costmap integration |
+| **5** | ToF-only navigation: holonomic DistBug with adaptive standoff, direction-aware speed levels, a control panel with safety and localisation readouts |
 
 Two motion profiles are available: `primitive` turns to face each leg before
 driving it, and `holonomic` blends translation and rotation freely. Details in
@@ -379,9 +380,9 @@ upper bound.
 
 ## Goals
 
-- **Next** — ToF-only navigation: a Bug2 navigator that uses the base's
-  holonomic motion to follow walls without turning, and a speed governor that
-  slows in steps as walls and obstacles close in along the direction of travel.
+- **Next** — for ToF-only navigation, a rolling local map so obstacles are
+  remembered once out of view, and a radar presence sensor for a "person
+  nearby" speed level. ToF-only DistBug navigation itself is done (phase 5).
 - **Near term** — commission the ToF ring on hardware, per-sensor diagnostics,
   a calibration procedure, and an MCU-side reflex stop independent of the ROS
   graph.
