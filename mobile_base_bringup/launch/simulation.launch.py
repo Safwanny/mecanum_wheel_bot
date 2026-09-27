@@ -486,6 +486,8 @@ def generate_launch_description():
             DeclareLaunchArgument('tof_shapes', default_value='true'),
             # The sensor power window; the switchboard itself always runs.
             DeclareLaunchArgument('sensor_panel', default_value='true'),
+            # Start with the LiDAR switched off, e.g. for ToF-only navigation.
+            DeclareLaunchArgument('lidar', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
             # Controller spawners start RViz from a delayed process-exit
             # handler. Capture this include's value now so a later include
@@ -629,7 +631,9 @@ def generate_launch_description():
                     {
                         'use_sim_time': LaunchConfiguration(
                             'use_sim_time'
-                        )
+                        ),
+                        'enabled.lidar': ParameterValue(
+                            LaunchConfiguration('lidar'), value_type=bool),
                     }
                 ],
                 output='screen',

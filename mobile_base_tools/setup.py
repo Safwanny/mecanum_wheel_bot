@@ -33,6 +33,8 @@ setup(
         'tof_scene_shapes = mobile_base_tools.tof_scene_shapes:main',
         'sensor_power = mobile_base_tools.sensor_power:main',
         'sensor_panel = mobile_base_tools.sensor_panel:main',
+        'speed_governor = mobile_base_tools.speed_governor:main',
+        'bug_navigator = mobile_base_tools.bug_navigator:main',
         'tf_validator = mobile_base_tools.tf_validator:main',
         'stop_simulation = mobile_base_tools.stop_simulation:main',
     ]},

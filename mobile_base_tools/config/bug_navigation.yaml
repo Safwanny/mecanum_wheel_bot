@@ -1,0 +1,36 @@
+# ToF-only navigation: Bug2 and the speed governor.
+#
+# Speed levels come from 2 * (v t + v^2 / 2a) <= d - 0.05 with t = 0.35 s and
+# a = 1.0 m/s^2, at the near edge of each band (see bug_model.py). Retune
+# `decel`-dependent speeds here once braking is measured on hardware.
+speed_governor:
+  ros__parameters:
+    cmd_in: /governor/cmd_vel
+    cmd_out: /mobile_base/cmd_vel
+    rise_delay: 0.5          # s a faster level must hold before stepping up
+    stale_after: 0.5         # s without ToF data before stopping
+    levels:
+      cruise: 0.50           # smoother and motor cap
+      caution: 0.33          # <= 0.337 allowed at 0.4 m
+      slow: 0.20             # <= 0.22 allowed at 0.25 m
+      crawl: 0.10            # <= 0.12 allowed at 0.15 m
+      caution_range: 1.0     # obstacles slow the robot from here
+      wall_caution_range: 0.65 # walls only from here; 0.5 m/s is safe from 0.65
+      slow_range: 0.4
+      crawl_range: 0.25
+      stop_range: 0.12
+      squeeze_slow: 0.15     # m beside the body: slow through narrow gaps
+      squeeze_crawl: 0.06    # m beside the body: crawl
+
+bug_navigator:
+  ros__parameters:
+    cmd_out: /governor/cmd_vel
+    rate: 20.0
+    speed: 0.5               # asked for; the governor decides what is allowed
+    standoff: 0.10           # m from the body face while following a boundary;
+                             # small so the robot follows into gaps it fits
+    hit_distance: 0.20       # m clear ahead below which a boundary is met
+    goal_tolerance: 0.10
+    line_tolerance: 0.05     # m either side of the m-line; odometry drifts
+    side: left               # keep obstacles on the right
+    heading_gain: 1.5
