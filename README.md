@@ -364,7 +364,8 @@ emergency stop.
 | **2** | SLAM Toolbox mapping, map serving, AMCL localization |
 | **3** | Nav2 costmaps, global planning, command arbitration, e-stop, autonomous driving |
 | **4** | ToF perimeter: eight-sensor ring, floor/obstacle classification by class and range, scene shapes, per-sensor power switches, local costmap integration |
-| **5** | ToF-only navigation: holonomic DistBug with adaptive standoff, direction-aware speed levels, a control panel with safety and localisation readouts |
+| **5** | ToF-only navigation: holonomic DistBug with adaptive standoff, deadlock guards, direction-aware speed levels, a control panel with safety and localisation readouts |
+| **6** | Unknown environments: live SLAM (no saved map), laser odometry and gyro-bias correction in the EKF, Nav2 planning through unexplored space, ToF speed governor, DistBug fallback, frontier exploration |
 
 Two motion profiles are available: `primitive` turns to face each leg before
 driving it, and `holonomic` blends translation and rotation freely. Details in
@@ -380,9 +381,9 @@ upper bound.
 
 ## Goals
 
-- **Next** — for ToF-only navigation, a rolling local map so obstacles are
-  remembered once out of view, and a radar presence sensor for a "person
-  nearby" speed level. ToF-only DistBug navigation itself is done (phase 5).
+- **Next** — a voxel layer (STVL) so low obstacles are remembered after they
+  leave the ToF ring's view, e-stop control on the panel, and a radar presence
+  sensor for a "person nearby" speed level.
 - **Near term** — commission the ToF ring on hardware, per-sensor diagnostics,
   a calibration procedure, and an MCU-side reflex stop independent of the ROS
   graph.
@@ -394,6 +395,20 @@ upper bound.
 
 ---
 
+### Navigating somewhere it has never been
+
+Measured in `my_world`, starting with no map at all: from the hallway into an
+unseen bedroom through a 0.70 m door in 31 s, and across the whole flat to the
+far bedroom in 94 s, both by Nav2 alone. SLAM put the robot 3.9 cm and 5.4 cm
+from Gazebo's ground truth at the end of those runs.
+
+Two things had to be fixed to get there, both measured on the costmaps. A live
+map only covers what has been seen, so a goal in an unseen room was off a
+map-sized global costmap and refused outright; the global costmap is now a
+window larger than the building. And the LiDAR smears a door jamb seen at a
+grazing angle about 15 cm into the opening; a steeper inflation fall-off keeps
+the doorway's centre line cheap without allowing contact.
+
 ## Documentation
 
 | You want to | Read |
@@ -401,6 +416,20 @@ upper bound.
 | Understand the project | this file |
 | Run, drive, map or inspect it | [docs/GUIDE.md](docs/GUIDE.md) |
 | Look up a frame, topic, measurement or derivation | [ARCHITECTURE.md](ARCHITECTURE.md) |
+
+## Third-party sources
+
+Laser odometry (rf2o) and frontier exploration (explore_lite) are built from
+source, pinned in `mobile_base.repos`:
+
+```bash
+vcs import ~/ros2_ws/src/external < ~/ros2_ws/src/mobile_base/mobile_base.repos
+cd ~/ros2_ws && colcon build --base-paths src/external --packages-select rf2o_laser_odometry explore_lite_msgs explore_lite
+```
+
+Both are optional: without them everything builds and runs, the EKF simply
+has one input fewer, and exploration is unavailable. The voxel layer comes
+from apt: `sudo apt install ros-jazzy-spatio-temporal-voxel-layer`.
 
 ## Packages
 

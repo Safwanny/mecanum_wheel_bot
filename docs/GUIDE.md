@@ -31,6 +31,7 @@ ros2 run mobile_base_tools stop_simulation
 | [7](#part-7--the-tof-perimeter) | The ToF ring: running it, proving it works |
 | [8](#part-8--inspecting-a-running-robot) | Introspecting frames, topics, parameters |
 | [9](#part-9--tof-only-navigation) | Driving to a goal on the ToF ring alone: DistBug, speed levels, the control panel |
+| [10](#part-10--navigating-an-unknown-environment) | Live SLAM: goals in places never mapped, exploration, both RViz views |
 
 ---
 
@@ -1365,7 +1366,11 @@ the sim then runs at about a quarter of real time.
 - **Leaving (DistBug)**: as soon as a clear run toward the goal, down a swath
   0.30 m either side of the body, would end closer to the goal than anywhere it
   has been since meeting the obstacle - or the goal is in clear view.
-- **Unreachable**: back where it met the obstacle without having left it.
+- **Unreachable**: back where it met the obstacle without having left it -
+  after first trying once the other way round.
+- **Deadlocks**: stalled (commanding motion, under 5 cm in 5 s) it backs off
+  0.2 m and retries (panel: RECOVERING); after three tries it stops as STUCK
+  rather than loop.
 
 `algorithm: bug2` in `mobile_base_tools/config/bug_navigation.yaml` switches to
 Bug2's m-line leaving rule for comparison.
@@ -1414,4 +1419,119 @@ correcting them; without a map, odometry is the only position there is.
 - The ring sees low obstacles to 0.4 m only; behind the robot's current
   direction it relies on the fans overlapping.
 - A bug algorithm has no memory of places: in a maze it can take long detours.
+
+---
+
+## Part 10 — Navigating an unknown environment
+
+No saved map: SLAM builds one as the robot drives, Nav2 plans on it -
+including through space not yet seen - and DistBug takes over if Nav2 gives
+up. Every sensor except the camera is used.
+
+### Once: third-party sources
+
+```bash
+vcs import ~/ros2_ws/src/external < ~/ros2_ws/src/mobile_base/mobile_base.repos
+```
+```bash
+cd ~/ros2_ws && colcon build --base-paths src/external --packages-select rf2o_laser_odometry explore_lite_msgs explore_lite
+```
+```bash
+sudo apt install ros-jazzy-spatio-temporal-voxel-layer
+```
+
+### Step 1 - build and launch (terminal 1)
+
+```bash
+cd ~/ros2_ws && colcon build && source install/setup.bash
+```
+```bash
+ros2 launch mobile_base_navigation explore_navigation.launch.py world:=my_world
+```
+
+Opens the **map RViz** (live SLAM map, planned path, costmaps) and the
+**control panel**. Wait until the map shows the robot with the first walls
+round it, 30-60 s.
+
+### Step 2 - the simulation RViz (terminal 2, optional)
+
+The close-up that follows the robot: ToF rays, obstacle hits, wall shapes,
+floor region. Use the full path; a relative one opens an empty RViz when run
+from another folder.
+
+```bash
+source ~/ros2_ws/install/setup.bash && rviz2 -d $(ros2 pkg prefix mobile_base_description)/share/mobile_base_description/rviz/mobile_base_sim.rviz --ros-args -p use_sim_time:=true -r __node:=sim_rviz
+```
+
+### Step 3 - release the e-stop (terminal 3)
+
+Latched at every start; nothing moves until it is released.
+
+```bash
+source ~/ros2_ws/install/setup.bash && ros2 service call /estop_gate/reset std_srvs/srv/Trigger
+```
+
+### Step 4 - give a goal
+
+In the **map RViz**: **2D Goal Pose**, click where to go, drag for the final
+heading. Unexplored grey is fine. Or from terminal 3:
+
+```bash
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: map}, pose: {position: {x: -3.5, y: 2.5}, orientation: {w: 1.0}}}"
+```
+
+| x, y in `my_world` | Where |
+| --- | --- |
+| -3.5, 2.5 | North-west bedroom, 0.70 m door |
+| 3.5, -3.8 | Master bedroom, across the flat via the gap in the south wall |
+| 4.0, 4.0 | Bathroom |
+| -4.0, -3.0 | South-west room |
+
+### Step 5 - watch
+
+| Where | What |
+| --- | --- |
+| Map RViz | Path appears; walls fill in; the path re-plans as they do |
+| Sim RViz | Rays and shapes react to walls and doorways |
+| Panel | Speed, level and its cause, navigator mode, distance to goal, pose uncertainty |
+
+Panel **STOP / RELEASE** freezes and resumes autonomous driving. If the mode
+turns to **bug fallback**, Nav2 found no way and DistBug is working round the
+blockage; it hands back once past it.
+
+```bash
+ros2 topic echo /nav_supervisor/mode
+```
+
+### Exploring by itself
+
+```bash
+ros2 launch mobile_base_navigation explore_navigation.launch.py world:=my_world explore:=true
+```
+
+Then steps 2-3. Frontiers show in the map RViz; it drives to each until none
+is left, then returns to the start.
+
+### Stopping
+
+Ctrl-C in terminals 1 and 2, then:
+
+```bash
+ros2 run mobile_base_tools stop_simulation
+```
+
+### Measured
+
+| Run in `my_world`, from no map | Time | Navigator | SLAM error vs ground truth |
+| --- | --- | --- | --- |
+| Hallway to north-west bedroom | 31 s | Nav2 | 3.9 cm |
+| Hallway to master bedroom | 94 s | Nav2 | 5.4 cm |
+
+### Limits
+
+- The e-stop must be released by hand after every launch.
+- rf2o needs structure: in a long featureless corridor scan matching degrades
+  and its jumps are rejected, leaving wheels and gyro.
+- Doorways narrower than about 0.5 m after LiDAR jamb smear are refused by the
+  planner; DistBug, which uses the ToF instead, may still get through.
 

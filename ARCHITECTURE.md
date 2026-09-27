@@ -1214,6 +1214,74 @@ a = 1.0 m/s^2). No ToF data for 0.5 s stops the robot. The STOP latch
 (`/speed_governor/stop`) holds its output at zero; `/speed_governor/status`
 reports level, cause and the nearest obstacle for the panel.
 
+## Localization inputs
+
+The EKF (`mobile_base_localization/config/ekf.yaml`) fuses three velocity
+sources and no absolute pose; absolute correction comes from AMCL or SLAM.
+
+| Input | Source | Fused |
+| --- | --- | --- |
+| `odom0` | wheel odometry `/mobile_base_controller/odometry` | vx, vy, yaw rate |
+| `odom1` | `/laser_odometry` (rf2o via `laser_odometry.py`) | vx, vy, yaw rate |
+| `imu0` | `/imu/data_unbiased` (`imu_bias.py`) | yaw rate |
+
+- **rf2o** matches consecutive scans. Its ROS 2 node fixes the sideways
+  velocity at zero, which would tell the EKF a mecanum base never strafes, so
+  `laser_odometry` differentiates rf2o's pose into body velocities, attaches
+  covariances (rf2o leaves them zero, i.e. "perfect") and drops matches faster
+  than the base can move. Off unless `laser_odometry:=true`, because rf2o is a
+  source build (`mobile_base.repos`).
+- **imu_bias** learns the gyro offset whenever the wheels report the base
+  still for a second, and subtracts it. Heading is the error the wheels cannot
+  correct, since mecanum rollers slip in rotation.
+- **`dynamic_process_noise_covariance: true`** scales process noise with
+  velocity. With it false the pose covariance grew without bound at rest,
+  passing a metre in about 20 s; now it grows only while moving.
+
+Acceleration and the IMU's absolute orientation are deliberately not fused:
+integrated twice, accelerometer bias becomes metres of error within seconds,
+and a 6-axis IMU has no absolute heading.
+
+## Unknown-environment navigation
+
+`explore_navigation.launch.py` wraps `planning.launch.py` with
+`localization:=slam` and `speed_governor:=true`:
+
+```
+slam_toolbox (mapping, live)   --map -> odom-->  Nav2 on the growing /map
+controller / behaviours -> /cmd_vel_ungoverned -> speed_governor
+    -> cmd_vel_nav -> velocity_smoother -> collision_monitor -> twist_mux
+nav_supervisor: Nav2 aborted -> goal (map -> odom) to DistBug
+                DistBug round the blockage -> goal back to Nav2
+explore_lite (explore:=true): frontier goals until the map is complete
+```
+
+- **`localization:=slam`** includes the bringup mapping stack instead of
+  map_server + AMCL, starts the navigation servers at once (no initial pose to
+  wait for) and loads `planner_unknown.yaml` last on the planner.
+- **`planner_unknown.yaml`**: `allow_unknown: true`; the global costmap becomes a
+  20 m rolling window, because a static costmap is sized to the map and a live
+  map covers only what has been seen; inflation `cost_scaling_factor: 8` so a
+  doorway narrowed by LiDAR jamb smear keeps a cheap centre line.
+- **The governor** sits before the smoother, so Nav2's commands are capped by
+  the ToF along the direction of travel exactly like DistBug's, and the
+  smoother still ramps whatever it allows.
+- **The supervisor** watches `/navigate_to_pose/_action/status` alongside
+  bt_navigator (which takes `/goal_pose` itself); a lingering status of the
+  goal that already aborted is ignored, so a hand-back cannot re-trigger it.
+  DistBug listens on `/bug_navigator/goal` in this mode and drives into
+  `/cmd_vel_ungoverned`.
+- The e-stop latches at startup as in every Nav2 launch.
+
+### DistBug deadlock guards
+
+`bug_model.Bug2.step` wraps the algorithm: a stall watchdog (commanding motion,
+< 5 cm in 5 s) backs off 0.2 m and retries; leaving must beat the best
+distance to goal of the whole trip by a step, so leave/re-hit cannot cycle;
+returning to a hit point flips the follow side once before UNREACHABLE; a
+direction reversing four times within two seconds is held; three recoveries
+end in STUCK. Each is covered by a kinematic test.
+
 ## Validation boundaries
 
 Static description tests enforce four wheel links/joints, four motor links on
