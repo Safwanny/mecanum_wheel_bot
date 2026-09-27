@@ -203,3 +203,35 @@ def test_following_in_the_open_keeps_its_distance():
     assert state == ARRIVED
     # Nothing else around, so it never closes to the minimum.
     assert clearance(path, box) > 0.13 + 0.15
+
+
+
+def run(bug, pose, goal, boxes, steps=4000):
+    bug.set_goal(pose, goal)
+    path = [pose]
+    for _ in range(steps):
+        vx, vy = bug.step(pose, boxes_points(pose, boxes))
+        if bug.state in (ARRIVED, UNREACHABLE):
+            break
+        pose = (pose[0] + vx * 0.05, pose[1] + vy * 0.05, 0.0)
+        path.append(pose)
+    length = sum(math.dist(a[:2], b[:2]) for a, b in zip(path, path[1:]))
+    return bug.state, length
+
+
+def test_distbug_leaves_the_wall_earlier_than_bug2():
+    # A long wall across the way with the goal off to one side of it:
+    # Bug2 must return to the m-line, DistBug heads off once the way is clear.
+    wall = (1.0, -0.5, 1.2, 1.6)
+    start, goal = (0.0, 0.0, 0.0), (2.5, 2.4)
+    bug2, bug2_length = run(Bug2(speed=0.3, algorithm='bug2'), start, goal,
+                            (wall,))
+    dist, dist_length = run(Bug2(speed=0.3), start, goal, (wall,))
+    assert bug2 == ARRIVED and dist == ARRIVED
+    assert dist_length <= bug2_length
+
+
+def test_distbug_still_reports_an_enclosed_goal_unreachable():
+    box = (1.0, -0.6, 2.0, 0.6)
+    state, _ = run(Bug2(speed=0.3), (0.0, 0.0, 0.0), (1.5, 0.0), (box,))
+    assert state == UNREACHABLE

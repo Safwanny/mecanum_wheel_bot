@@ -1,4 +1,4 @@
-# ToF-only navigation: Bug2 and the speed governor.
+# ToF-only navigation: DistBug/Bug2 and the speed governor.
 #
 # Speed levels come from 2 * (v t + v^2 / 2a) <= d - 0.05 with t = 0.35 s and
 # a = 1.0 m/s^2, at the near edge of each band (see bug_model.py). Retune
@@ -34,5 +34,7 @@ bug_navigator:
                              # a gap it fits leaves the corridor clear, so no hit
     goal_tolerance: 0.10
     line_tolerance: 0.05     # m either side of the m-line; odometry drifts
+    algorithm: distbug       # distbug leaves walls early; bug2 waits for the m-line
+    sense_range: 1.0         # m a clear corridor is trusted (obstacle marking range)
     side: left               # keep obstacles on the right
     heading_gain: 1.5

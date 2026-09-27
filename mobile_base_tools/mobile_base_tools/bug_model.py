@@ -39,6 +39,13 @@ face of the ring can serve, because the ring is 360 degrees. It leaves the
 boundary where Bug2 does: back on the m-line, closer to the goal than where it
 hit, with the way to the goal clear.
 
+**DistBug** (Kamon and Rivlin), the default, leaves earlier. While following
+it tracks the closest it has been to the goal, ``d_min``, and leaves as soon
+as the free range the ring reports toward the goal, ``F``, makes
+``d(x, goal) - F <= d_min - step`` - a clear run from here would end closer
+than anywhere so far - or the goal itself is in clear view. Bug2's m-line
+rule is kept as ``algorithm='bug2'`` for comparison.
+
 The standoff adapts to the space. With the far side open the robot keeps a
 comfortable ``standoff`` from the wall it follows; as the far side closes in -
 a corridor, a gap - it moves towards the middle, down to ``min_standoff``. It
@@ -224,7 +231,8 @@ class Bug2:
                  hit_distance=0.35,
                  goal_tolerance=0.10, line_tolerance=0.05, leave_gain=0.10,
                  gain=2.0, follow_range=0.8, side='left',
-                 contact_window=math.radians(100.0)):
+                 contact_window=math.radians(100.0), algorithm='distbug',
+                 sense_range=1.0, step=0.10):
         self.speed = speed
         self.standoff = standoff
         self.min_standoff = min_standoff
@@ -236,6 +244,12 @@ class Bug2:
         self.follow_range = follow_range
         self.turn = 1.0 if side == 'left' else -1.0
         self.contact_window = contact_window
+        self.algorithm = algorithm
+        # How far a clear corridor may be trusted: the obstacle marking range.
+        # An empty corridor means nothing seen within it, not a clear path.
+        self.sense_range = sense_range
+        self.step_length = step
+        self.closest = math.inf
         # Body-frame direction to the boundary being followed. Heading is held
         # constant, so the body frame does not rotate under it.
         self.contact = None
@@ -276,15 +290,20 @@ class Bug2:
             self.contact = (gx, gy)
             self.hit = (pose[0], pose[1])
             self.hit_to_goal = self.to_goal(pose)
+            self.closest = self.hit_to_goal
             self.left_hit = False
 
         # FOLLOW
         here = (pose[0], pose[1])
         if not self.left_hit and math.dist(here, self.hit) > 0.3:
             self.left_hit = True
-        if (line_distance(here, self.start, self.goal) <= self.line_tolerance
-                and self.to_goal(pose) < self.hit_to_goal - self.leave_gain
-                and ahead > self.hit_distance + 0.1):
+        distance = self.to_goal(pose)
+        self.closest = min(self.closest, distance)
+        # Leave only down a swath as wide as the standoff: the narrow corridor
+        # that lets the robot through a gap would let it clip a corner here.
+        roomy = corridor_distance(points, gx, gy, margin=self.standoff)
+        if roomy > self.hit_distance + 0.1 and self.may_leave(
+                here, distance, roomy):
             self.state = GO_TO_GOAL
             return self.speed * gx, self.speed * gy
         if self.left_hit and math.dist(here, self.hit) < 0.15:
@@ -317,6 +336,16 @@ class Bug2:
         vx, vy = tx + pull * nx, ty + pull * ny
         norm = math.hypot(vx, vy)
         return self.speed * vx / norm, self.speed * vy / norm
+
+    def may_leave(self, here, distance, ahead):
+        """The leaving rule of the chosen algorithm, the way ahead being clear."""
+        if self.algorithm == 'bug2':
+            return (line_distance(here, self.start, self.goal)
+                    <= self.line_tolerance
+                    and distance < self.hit_to_goal - self.leave_gain)
+        free = min(ahead, self.sense_range)
+        return (free >= distance
+                or distance - free <= self.closest - self.step_length)
 
     def target_standoff(self, points, nx, ny, clearance):
         """How far to keep from the followed boundary, given the far side.

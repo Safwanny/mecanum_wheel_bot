@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Drive to a goal with the ToF ring alone: a holonomic Bug2.
+"""Drive to a goal with the ToF ring alone: holonomic DistBug (or Bug2).
 
 Goal from RViz's "2D Goal Pose" (``/goal_pose``, in ``odom``), pose from the
 EKF (``/odometry/filtered``), obstacles from ``/tof/obstacles``. No map, no
@@ -66,6 +66,8 @@ class BugNavigator(Node):
         value('line_tolerance', 0.05)
         value('side', 'left')
         value('heading_gain', 1.5)
+        value('algorithm', 'distbug')
+        value('sense_range', 1.0)
         get = self.get_parameter
         self.bug = Bug2(
             speed=get('speed').value, standoff=get('standoff').value,
@@ -73,7 +75,8 @@ class BugNavigator(Node):
             hit_distance=get('hit_distance').value,
             goal_tolerance=get('goal_tolerance').value,
             line_tolerance=get('line_tolerance').value,
-            side=get('side').value)
+            side=get('side').value, algorithm=get('algorithm').value,
+            sense_range=get('sense_range').value)
         self.heading_gain = get('heading_gain').value
 
         self.pose = None

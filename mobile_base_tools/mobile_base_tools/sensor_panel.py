@@ -23,6 +23,7 @@ the switch took, it redraws from ``/sensors/status``, so what it shows is what
 the robot is actually doing.
 """
 
+import json
 import math
 import sys
 
@@ -35,6 +36,7 @@ from PyQt5.QtWidgets import (
     QApplication, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QVBoxLayout, QWidget)
 from std_msgs.msg import String
+from std_srvs.srv import SetBool
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 import rclpy
@@ -238,9 +240,14 @@ class Telemetry(QWidget):
     """
 
     FIELDS = (
+        # Motion
         ('speed', 'Speed'), ('velocity', 'Velocity (body)'),
         ('heading', 'Heading'), ('position', 'Position (odom)'),
-        ('level', 'Speed level'), ('state', 'Navigator'),
+        # Safety
+        ('level', 'Speed level'), ('limit', 'Limited by'),
+        ('nearest', 'Nearest obstacle'), ('state', 'Navigator'),
+        # Localisation
+        ('sigma', 'Pose uncertainty (1σ)'), ('gap', 'Wheel vs fused'),
         ('goal', 'To goal'),
     )
 
@@ -253,7 +260,7 @@ class Telemetry(QWidget):
             grid.setColumnStretch(column, 1)
         self.values = {}
         for index, (key, name) in enumerate(self.FIELDS):
-            caption = QLabel(name.upper())
+            caption = QLabel(name.upper().replace('Σ', 'σ'))
             caption.setStyleSheet('color: #8A94A0; font: 8pt;')
             value = QLabel('—')
             value.setStyleSheet('font: bold 11pt;')
@@ -284,7 +291,13 @@ class SensorPanel(QWidget):
         all_off = QPushButton('All ToF off')
         all_on.clicked.connect(lambda: self.set_all(True))
         all_off.clicked.connect(lambda: self.set_all(False))
+        self.stop_button = QPushButton('STOP')
+        self.stop_button.setMinimumHeight(44)
+        self.stop_button.clicked.connect(self.toggle_stop)
+        self.stopped = False
+        self.style_stop()
         row = QHBoxLayout()
+        row.addWidget(self.stop_button)
         for widget in (all_on, all_off):
             widget.setStyleSheet(
                 'QPushButton { background: #2E333A; border: 1px solid #6B7480;'
@@ -305,6 +318,7 @@ class SensorPanel(QWidget):
         layout.addWidget(self.telemetry)
         layout.addLayout(row)
         self.pose = None
+        self.wheel = None
         self.goal = None
 
         self.client = node.create_client(
@@ -314,7 +328,11 @@ class SensorPanel(QWidget):
         node.create_subscription(
             Odometry, '/odometry/filtered', self.on_odometry, 10)
         node.create_subscription(
-            String, '/speed_governor/level', self.on_level, 10)
+            String, '/speed_governor/status', self.on_governor, 10)
+        node.create_subscription(
+            Odometry, '/mobile_base_controller/odometry', self.on_wheel, 10)
+        self.stop_client = node.create_client(
+            SetBool, '/speed_governor/stop')
         node.create_subscription(
             String, '/bug_navigator/state', self.on_state, 10)
         node.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
@@ -332,14 +350,62 @@ class SensorPanel(QWidget):
             vx, vy, twist.angular.z))
         show('heading', '{:+.1f}°'.format(math.degrees(yaw)))
         show('position', '{:+.2f}, {:+.2f} m'.format(*self.pose))
+        # Covariance diagonal: x at 0, y at 7, yaw at 35.
+        c = message.pose.covariance
+        show('sigma', '±{:.1f} cm  ±{:.1f}°'.format(
+            100.0 * math.sqrt(max(c[0], c[7], 0.0)),
+            math.degrees(math.sqrt(max(c[35], 0.0)))))
+        if self.wheel is not None:
+            # How far the fused pose has moved away from wheels alone: a
+            # growing gap is slip, or the IMU correcting the wheels.
+            show('gap', '{:.2f} m  {:+.1f}°'.format(
+                math.dist(self.pose, self.wheel[:2]),
+                math.degrees(math.atan2(math.sin(yaw - self.wheel[2]),
+                                        math.cos(yaw - self.wheel[2])))))
         if self.goal is not None:
             show('goal', '{:.2f} m'.format(math.dist(self.pose, self.goal)))
 
-    def on_level(self, message):
-        level, _, cap = message.data.partition(' ')
+    def on_wheel(self, message):
+        pose = message.pose.pose
+        q = pose.orientation
+        self.wheel = (pose.position.x, pose.position.y, math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z)))
+
+    def on_governor(self, message):
+        status = json.loads(message.data)
+        level = status['level']
         self.telemetry.set(
-            'level', '{}  ≤ {} m/s'.format(level.upper(), cap or '?'),
+            'level', '{}  ≤ {:.2f} m/s'.format(level.upper(), status['cap']),
             LEVEL_COLOURS.get(level, TEXT.name()))
+        self.telemetry.set('limit', status['reason'])
+        if status['nearest'] is None:
+            self.telemetry.set('nearest', 'none in range', TEXT.name())
+        else:
+            # Bearing in the body frame: 0 is the front, positive to the left.
+            self.telemetry.set(
+                'nearest', '{:.2f} m  at {:+.0f}°'.format(
+                    status['nearest'], status['bearing']),
+                palette.warning_hex(status['nearest']))
+        if status['stopped'] != self.stopped:
+            self.stopped = status['stopped']
+            self.style_stop()
+
+    def toggle_stop(self):
+        if not self.stop_client.service_is_ready():
+            self.status.setText('speed_governor not running')
+            return
+        self.stop_client.call_async(SetBool.Request(data=not self.stopped))
+
+    def style_stop(self):
+        """Red STOP while driving is allowed; amber RELEASE while latched."""
+        if self.stopped:
+            text, colour = 'RELEASE', palette.CAUTION
+        else:
+            text, colour = 'STOP', palette.CRITICAL
+        self.stop_button.setText(text)
+        self.stop_button.setStyleSheet(
+            'QPushButton {{ background: {}; color: #111; border-radius: 6px;'
+            ' font: bold 12pt; padding: 6px 28px; }}'.format(colour))
 
     def on_state(self, message):
         self.telemetry.set('state', message.data.replace('_', ' ').upper())

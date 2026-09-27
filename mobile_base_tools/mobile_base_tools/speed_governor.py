@@ -25,12 +25,21 @@ changes. Rotation passes through.
 A squeeze - something within a few centimetres beside the body, as in a
 narrow gap - slows it too, even with the corridor ahead clear.
 
+A STOP latch (``/speed_governor/stop``, std_srvs/SetBool) holds every
+command it passes at zero until released - the panel's stop button. It stops
+what comes through the governor, i.e. autonomous driving; it is not a
+hardware e-stop.
+
+``/speed_governor/status`` (JSON in a String, 5 Hz, also while idle) says
+what limits the speed right now and where the nearest obstacle is.
+
 Levels drop at once and rise only after the faster band has been clear for
 ``rise_delay`` - a level that flickers up between frames would undo the
 margin it exists for. With no obstacle data for ``stale_after`` the governor
 stops the robot: silence from the ring is not the same as a clear path.
 """
 
+import json
 import math
 import time
 
@@ -40,12 +49,14 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
+from std_srvs.srv import SetBool
 from visualization_msgs.msg import Marker
 
 from mobile_base_tools import tof_palette as palette
 from mobile_base_tools.bug_model import (
     CAUTION, CRAWL, CRUISE, LEVELS, SLOW, STOP, SpeedLevels,
-    corridor_distance, side_clearance, slowest, split_walls)
+    corridor_distance, nearest_clearance, side_clearance, slowest,
+    split_walls)
 
 LEVEL_COLOUR = {
     CRUISE: palette.CLEAR, CAUTION: palette.CAUTION, SLOW: palette.CAUTION,
@@ -84,6 +95,10 @@ class SpeedGovernor(Node):
         self.last_cloud = None
         self.level = STOP
         self.faster_since = None
+        self.stopped = False
+        self.reason = 'starting'
+        self.heading = (1.0, 0.0)
+        self.last_command = None
 
         self.publisher = self.create_publisher(
             TwistStamped, get('cmd_out').value, 10)
@@ -95,6 +110,26 @@ class SpeedGovernor(Node):
             PointCloud2, get('obstacle_topic').value, self.on_cloud, 5)
         self.create_subscription(
             TwistStamped, get('cmd_in').value, self.on_command, 10)
+        self.status_publisher = self.create_publisher(
+            String, '/speed_governor/status', 10)
+        self.create_service(SetBool, '/speed_governor/stop', self.on_stop)
+        self.create_timer(0.2, self.publish_status)
+
+    def on_stop(self, request, response):
+        self.stopped = request.data
+        if self.stopped:
+            self.publisher.publish(self.zero())
+        self.get_logger().warn(
+            'STOP latched' if self.stopped else 'STOP released')
+        response.success = True
+        response.message = 'stopped' if self.stopped else 'released'
+        return response
+
+    def zero(self):
+        out = TwistStamped()
+        out.header.stamp = self.get_clock().now().to_msg()
+        out.header.frame_id = 'base_footprint'
+        return out
 
     def on_cloud(self, message):
         points = [
@@ -106,17 +141,27 @@ class SpeedGovernor(Node):
         self.last_cloud = time.monotonic()
 
     def allowed(self, vx, vy):
-        """The level the corridor along (vx, vy) allows right now."""
+        """The level the corridor along (vx, vy) allows, and why."""
+        if self.stopped:
+            return STOP, 'stop button'
         if (self.last_cloud is None
                 or time.monotonic() - self.last_cloud > self.stale_after):
-            return STOP
+            return STOP, 'no ToF data'
         if math.hypot(vx, vy) < 1e-6:
-            return CRUISE
-        return slowest(
-            self.levels.level(corridor_distance(self.walls, vx, vy), True),
-            self.levels.level(corridor_distance(self.others, vx, vy)),
-            self.levels.squeeze(
-                side_clearance(self.walls + self.others, vx, vy)))
+            return CRUISE, 'idle'
+        causes = (
+            (self.levels.level(corridor_distance(self.walls, vx, vy), True),
+             'wall ahead'),
+            (self.levels.level(corridor_distance(self.others, vx, vy)),
+             'obstacle ahead'),
+            (self.levels.squeeze(
+                side_clearance(self.walls + self.others, vx, vy)),
+             'narrow gap'),
+        )
+        level = slowest(*(cause[0] for cause in causes))
+        if level == CRUISE:
+            return CRUISE, 'clear'
+        return level, next(why for lvl, why in causes if lvl == level)
 
     def settle(self, wanted):
         """Drop at once; rise only once the faster level has held a while."""
@@ -134,7 +179,13 @@ class SpeedGovernor(Node):
     def on_command(self, message):
         twist = message.twist
         vx, vy = twist.linear.x, twist.linear.y
-        self.settle(self.allowed(vx, vy))
+        self.last_command = time.monotonic()
+        if math.hypot(vx, vy) > 1e-6:
+            self.heading = (vx, vy)
+        wanted, self.reason = self.allowed(vx, vy)
+        self.settle(wanted)
+        if LEVELS.index(self.level) < LEVELS.index(wanted):
+            self.reason = 'ramping back up'
         limit = self.levels.speeds[self.level]
         speed = math.hypot(vx, vy)
         scale = 1.0 if speed <= limit else limit / speed
@@ -143,12 +194,31 @@ class SpeedGovernor(Node):
         out.header.frame_id = message.header.frame_id or 'base_footprint'
         out.twist.linear.x = vx * scale
         out.twist.linear.y = vy * scale
-        out.twist.angular.z = twist.angular.z
+        out.twist.angular.z = 0.0 if self.stopped else twist.angular.z
         self.publisher.publish(out)
         # Level and its cap, e.g. 'caution 0.33', for the panel.
         self.level_publisher.publish(
             String(data='{} {:.2f}'.format(self.level, limit)))
         self.marker_publisher.publish(self.badge(limit))
+
+    def publish_status(self):
+        """Level, cause and nearest obstacle, for the panel."""
+        reason = self.reason
+        if (self.last_command is None
+                or time.monotonic() - self.last_command > 0.5):
+            # Not driving: preview what would limit the last direction driven.
+            _, reason = self.allowed(*self.heading)
+        nearest = nearest_clearance(self.walls + self.others)
+        status = {
+            'level': self.level,
+            'cap': self.levels.speeds[self.level],
+            'reason': reason,
+            'stopped': self.stopped,
+            'nearest': None if nearest is None else round(nearest[0], 3),
+            'bearing': None if nearest is None else round(math.degrees(
+                math.atan2(nearest[2], nearest[1])), 1),
+        }
+        self.status_publisher.publish(String(data=json.dumps(status)))
 
     def badge(self, limit):
         """A label over the robot: the level and its speed cap."""
