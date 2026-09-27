@@ -33,7 +33,12 @@ def main() -> None:
     assert params['odom_frame'] == 'odom'
     assert params['base_link_frame'] == 'base_footprint'
     assert params['odom0'] == '/mobile_base_controller/odometry'
-    assert params['imu0'] == '/imu/data'
+    # The gyro reaches the EKF through imu_bias, which removes its offset.
+    assert params['imu0'] == '/imu/data_unbiased'
+    # Laser odometry is the second velocity source, same axes as the wheels.
+    assert params['odom1'] == '/laser_odometry'
+    # Noise scales with velocity, so a still robot's uncertainty holds.
+    assert params['dynamic_process_noise_covariance'] is True
     assert 'ground_truth' not in str(params)
 
     expected_odom = [False] * 15
@@ -42,6 +47,7 @@ def main() -> None:
     expected_imu = [False] * 15
     expected_imu[11] = True
     assert params['odom0_config'] == expected_odom
+    assert params['odom1_config'] == expected_odom
     assert params['imu0_config'] == expected_imu
     assert len(params['process_noise_covariance']) == 225
 

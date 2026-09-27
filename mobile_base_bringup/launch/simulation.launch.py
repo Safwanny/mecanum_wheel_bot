@@ -415,6 +415,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'laser_odometry': LaunchConfiguration('laser_odometry'),
         }.items(),
         condition=IfCondition(LaunchConfiguration('localization')),
     )
@@ -488,6 +489,9 @@ def generate_launch_description():
             DeclareLaunchArgument('sensor_panel', default_value='true'),
             # Start with the LiDAR switched off, e.g. for ToF-only navigation.
             DeclareLaunchArgument('lidar', default_value='true'),
+            # rf2o scan-matching odometry into the EKF (needs the sources in
+            # mobile_base.repos built; off so a plain checkout still runs).
+            DeclareLaunchArgument('laser_odometry', default_value='false'),
             DeclareLaunchArgument('rviz', default_value='true'),
             # Controller spawners start RViz from a delayed process-exit
             # handler. Capture this include's value now so a later include
