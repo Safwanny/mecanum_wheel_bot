@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+
+# Copyright 2026 Safwan
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""A top-down panel of the robot with a power switch on every sensor.
+
+The robot is drawn front-up with each ToF sensor's 60 degree field of view as a
+wedge where it sits on the body, and the LiDAR in the middle. Clicking a wedge's
+switch sets ``enabled.<sensor>`` on ``sensor_power``; the panel never assumes
+the switch took, it redraws from ``/sensors/status``, so what it shows is what
+the robot is actually doing.
+"""
+
+import math
+import sys
+
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
+from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
+from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt5.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout,
+    QWidget)
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
+import rclpy
+from rclpy.node import Node
+
+from mobile_base_tools import tof_palette as palette
+from mobile_base_tools.sensor_power import LIDAR, SENSORS
+
+# Mount yaw of each face, counter-clockwise from the front, as in the URDF.
+MOUNT_YAW = {
+    'front': 0.0, 'front_left': 45.0, 'left': 90.0, 'rear_left': 135.0,
+    'rear': 180.0, 'rear_right': -135.0, 'right': -90.0, 'front_right': -45.0,
+}
+FIELD_OF_VIEW = 60.0
+# Everything below is drawn to one scale, the LiDAR ring filling the view, so
+# the difference in reach is what the eye sees first.
+LIDAR_RANGE = 4.0   # lidar_max_range, properties.xacro
+TOF_RANGE = 1.0     # obstacle_max_range, tof_floor_classifier
+TOF_WALL_RANGE = 2.0  # wall_max_range: walls only
+BODY_LENGTH = 0.26  # chassis_length, bumper to bumper
+BODY_WIDTH = 0.22   # across the wheels
+RING = 0.9          # LiDAR ring radius, as a share of the half-view
+SWITCH_RING = 0.56  # where the ToF switches sit, likewise
+
+BACKGROUND = QColor('#24262A')
+BODY = QColor('#3A3F47')
+BODY_EDGE = QColor('#6B7480')
+TEXT = QColor(palette.TEXT)
+ON = QColor(palette.CLEAR)
+OFF = QColor(palette.OFF)
+STALE = QColor(palette.CAUTION)
+
+
+def title(sensor):
+    return sensor.replace('_', ' ').upper()
+
+
+class RobotView(QWidget):
+    """Paint the body, the wedges and the LiDAR ring; host the switches."""
+
+    def __init__(self, on_toggle):
+        super().__init__()
+        self.setMinimumSize(520, 520)
+        self.on_toggle = on_toggle
+        self.state = {sensor: ('unknown', 0.0) for sensor in SENSORS}
+        self.buttons = {}
+        for sensor in SENSORS:
+            button = QPushButton(self)
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(
+                lambda checked, name=sensor: self.on_toggle(name, checked))
+            self.buttons[sensor] = button
+        self.update_state({})
+
+    def centre_and_scale(self):
+        side = min(self.width(), self.height())
+        return QPointF(self.width() / 2.0, self.height() / 2.0), side / 2.0
+
+    @staticmethod
+    def screen_angle(yaw):
+        # Front is up: robot yaw 0 points to screen -y, CCW stays CCW.
+        return math.radians(yaw + 90.0)
+
+    def colour(self, sensor):
+        message, _ = self.state[sensor]
+        if message == 'off':
+            return OFF
+        if message == 'on':
+            return ON
+        return STALE
+
+    def metres(self, radius):
+        """Pixels per metre: the LiDAR's reach fills RING of the half-view."""
+        return radius * RING / LIDAR_RANGE
+
+    def mount(self, centre, scale, yaw):
+        """Where a face's sensor sits on the body outline, on screen."""
+        angle = self.screen_angle(yaw)
+        half_w, half_l = BODY_WIDTH * scale / 2.0, BODY_LENGTH * scale / 2.0
+        # Walk out along the bearing until the rectangle's edge.
+        reach = min(
+            half_w / abs(math.cos(angle)) if abs(math.cos(angle)) > 1e-6
+            else float('inf'),
+            half_l / abs(math.sin(angle)) if abs(math.sin(angle)) > 1e-6
+            else float('inf'))
+        return QPointF(centre.x() + math.cos(angle) * reach,
+                       centre.y() - math.sin(angle) * reach)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), BACKGROUND)
+        centre, radius = self.centre_and_scale()
+        scale = self.metres(radius)
+
+        lidar = self.colour(LIDAR)
+        ring = QColor(lidar)
+        ring.setAlpha(28 if self.state[LIDAR][0] != 'off' else 12)
+        painter.setPen(QPen(lidar, 1.5, Qt.DashLine))
+        painter.setBrush(QBrush(ring))
+        painter.drawEllipse(centre, LIDAR_RANGE * scale, LIDAR_RANGE * scale)
+        painter.setFont(QFont('Sans', 8))
+        painter.setPen(QPen(lidar))
+        painter.drawText(QPointF(centre.x() + 6,
+                                 centre.y() - LIDAR_RANGE * scale + 16),
+                         'LiDAR  {:.1f} m'.format(LIDAR_RANGE))
+
+        wedge = TOF_RANGE * scale
+        wall = TOF_WALL_RANGE * scale
+        for sensor, yaw in MOUNT_YAW.items():
+            colour = self.colour(sensor)
+            origin = self.mount(centre, scale, yaw)
+            # Outer, fainter fan: the distance out to which only walls count.
+            reach = QColor(colour)
+            reach.setAlpha(30 if self.state[sensor][0] != 'off' else 10)
+            path = QPainterPath(origin)
+            path.arcTo(QRectF(origin.x() - wall, origin.y() - wall,
+                              2 * wall, 2 * wall),
+                       yaw + 90.0 - FIELD_OF_VIEW / 2.0, FIELD_OF_VIEW)
+            path.closeSubpath()
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(reach))
+            painter.drawPath(path)
+            fill = QColor(colour)
+            fill.setAlpha(110 if self.state[sensor][0] != 'off' else 40)
+            path = QPainterPath(origin)
+            path.arcTo(QRectF(origin.x() - wedge, origin.y() - wedge,
+                              2 * wedge, 2 * wedge),
+                       yaw + 90.0 - FIELD_OF_VIEW / 2.0, FIELD_OF_VIEW)
+            path.closeSubpath()
+            painter.setPen(QPen(colour, 1.2))
+            painter.setBrush(QBrush(fill))
+            painter.drawPath(path)
+            # Leader from the wedge tip out to its switch.
+            angle = self.screen_angle(yaw)
+            tip = QPointF(origin.x() + math.cos(angle) * wedge,
+                          origin.y() - math.sin(angle) * wedge)
+            end = QPointF(centre.x() + math.cos(angle) * radius * SWITCH_RING,
+                          centre.y() - math.sin(angle) * radius * SWITCH_RING)
+            leader = QColor(colour)
+            leader.setAlpha(120)
+            painter.setPen(QPen(leader, 1, Qt.DotLine))
+            painter.drawLine(tip, end)
+
+        painter.setPen(QPen(BODY_EDGE, 1.5))
+        painter.setBrush(QBrush(BODY))
+        painter.drawRoundedRect(
+            QRectF(centre.x() - BODY_WIDTH * scale / 2,
+                   centre.y() - BODY_LENGTH * scale / 2,
+                   BODY_WIDTH * scale, BODY_LENGTH * scale), 3, 3)
+        painter.setPen(QPen(TEXT))
+        painter.setFont(QFont('Sans', 8, QFont.Bold))
+        painter.drawText(QRectF(centre.x() - 40, centre.y()
+                                - BODY_LENGTH * scale / 2 - wedge - 18, 80, 14),
+                         Qt.AlignCenter, '▲ FRONT')
+        painter.setFont(QFont('Sans', 8))
+        painter.setPen(QPen(ON))
+        painter.drawText(QRectF(centre.x() - 90, centre.y()
+                                + BODY_LENGTH * scale / 2 + wedge + 4, 180, 14),
+                         Qt.AlignCenter, 'ToF  {:.1f} m  ·  walls {:.1f} m'.format(
+                             TOF_RANGE, TOF_WALL_RANGE))
+
+    def resizeEvent(self, _event):
+        centre, radius = self.centre_and_scale()
+        for sensor, button in self.buttons.items():
+            button.resize(112, 40)
+            if sensor == LIDAR:
+                # On the ring itself, at the bottom: it switches the ring.
+                point = QPointF(centre.x(), centre.y() + radius * RING)
+            else:
+                angle = self.screen_angle(MOUNT_YAW[sensor])
+                point = QPointF(
+                    centre.x() + math.cos(angle) * radius * SWITCH_RING,
+                    centre.y() - math.sin(angle) * radius * SWITCH_RING)
+            button.move(int(point.x() - 56), int(point.y() - 20))
+
+    def update_state(self, state):
+        self.state.update(state)
+        for sensor, button in self.buttons.items():
+            message, rate = self.state[sensor]
+            button.setChecked(message != 'off')
+            detail = {'off': 'OFF', 'unknown': '…'}.get(
+                message, '{:.1f} Hz'.format(rate) if message == 'on'
+                else 'NO DATA')
+            button.setText('{}\n{}'.format(title(sensor), detail))
+            colour = self.colour(sensor)
+            button.setStyleSheet(
+                'QPushButton {{ background: {bg}; color: {fg};'
+                ' border: 1px solid {edge}; border-radius: 6px;'
+                ' font: bold 9pt; }}'.format(
+                    bg='#2E333A' if message != 'off' else '#2A2426',
+                    fg=TEXT.name(), edge=colour.name()))
+        self.update()
+
+
+class SensorPanel(QWidget):
+    """Window: the robot view, all-on/all-off, and a status line."""
+
+    def __init__(self, node):
+        super().__init__()
+        self.node = node
+        self.setWindowTitle('Sensor power')
+        self.setStyleSheet('background: {}; color: {};'.format(
+            BACKGROUND.name(), TEXT.name()))
+        self.view = RobotView(self.toggle)
+        self.status = QLabel('Waiting for sensor_power…')
+        all_on = QPushButton('All ToF on')
+        all_off = QPushButton('All ToF off')
+        all_on.clicked.connect(lambda: self.set_all(True))
+        all_off.clicked.connect(lambda: self.set_all(False))
+        row = QHBoxLayout()
+        for widget in (all_on, all_off):
+            widget.setStyleSheet(
+                'QPushButton { background: #2E333A; border: 1px solid #6B7480;'
+                ' border-radius: 6px; padding: 6px 14px; }')
+            row.addWidget(widget)
+        row.addStretch()
+        row.addWidget(self.status)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.view)
+        layout.addLayout(row)
+
+        self.client = node.create_client(
+            SetParameters, '/sensor_power/set_parameters')
+        node.create_subscription(
+            DiagnosticArray, '/sensors/status', self.on_status, 5)
+
+    def on_status(self, message):
+        state = {}
+        for status in message.status:
+            if status.name not in SENSORS:
+                continue
+            rate = next((float(v.value) for v in status.values
+                         if v.key == 'rate_hz'), 0.0)
+            text = status.message
+            if status.level == DiagnosticStatus.STALE:
+                text = 'stale'
+            state[status.name] = (text, rate)
+        self.view.update_state(state)
+        self.status.setText('Live')
+
+    def toggle(self, sensor, enabled):
+        if sensor == LIDAR and not enabled:
+            answer = QMessageBox.warning(
+                self, 'Turn the LiDAR off?',
+                'SLAM, localisation and Nav2 all read /scan. With the LiDAR '
+                'off they stop updating, and the robot navigates on '
+                'odometry and ToF alone.',
+                QMessageBox.Ok | QMessageBox.Cancel)
+            if answer != QMessageBox.Ok:
+                self.view.buttons[LIDAR].setChecked(True)
+                return
+        self.send({sensor: enabled})
+
+    def set_all(self, enabled):
+        self.send({sensor: enabled for sensor in SENSORS if sensor != LIDAR})
+
+    def send(self, switches):
+        if not self.client.service_is_ready():
+            self.status.setText('sensor_power not running')
+            return
+        request = SetParameters.Request(parameters=[
+            Parameter(name='enabled.' + sensor, value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL, bool_value=value))
+            for sensor, value in switches.items()
+        ])
+        self.client.call_async(request)
+
+
+def main(args=None):
+    """Open the sensor power panel."""
+    rclpy.init(args=args)
+    node = Node('sensor_panel')
+    app = QApplication(sys.argv)
+    panel = SensorPanel(node)
+    panel.resize(600, 660)
+    panel.show()
+    spin = QTimer()
+    spin.timeout.connect(lambda: rclpy.spin_once(node, timeout_sec=0.0))
+    spin.start(20)
+    code = app.exec_()
+    node.destroy_node()
+    if rclpy.ok():
+        rclpy.shutdown()
+    sys.exit(code)
