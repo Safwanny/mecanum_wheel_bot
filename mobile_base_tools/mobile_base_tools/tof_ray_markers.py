@@ -37,14 +37,18 @@ of robot motion is far below a line width.
 
 import math
 
+from diagnostic_msgs.msg import DiagnosticArray
+from geometry_msgs.msg import Point
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import ColorRGBA
-from geometry_msgs.msg import Point
+from std_msgs.msg import UInt8MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
+
+from mobile_base_tools.tof_palette import (
+    HIT_ALERT, LABEL, RAY_ALERT, RAY_HIT, RAY_MISS, SENSOR_OFF)
 
 
 def zone_directions(zones, half_span):
@@ -110,37 +114,73 @@ class ToFRayMarkers(Node):
         self.declare_parameter('min_range', 0.02)
         self.declare_parameter('max_range', 3.5)
         self.declare_parameter('line_width', 0.001)
+        # How far a ray that saw nothing is drawn. The sensor reaches further,
+        # but nothing past the marking range is acted on, and 3.5 m spokes on
+        # every miss bury the returns that matter.
+        self.declare_parameter('miss_length', 1.0)
         self.declare_parameter('publish_rate', 15.0)
 
         self.zones = self.get_parameter('zones').value
         field_of_view = self.get_parameter('field_of_view').value
         zone_angle = field_of_view / self.zones
+        self.half_span = field_of_view / 2.0
         self.directions = zone_directions(
             self.zones, field_of_view / 2.0 - zone_angle / 2.0)
         self.min_range = self.get_parameter('min_range').value
         self.max_range = self.get_parameter('max_range').value
         self.line_width = self.get_parameter('line_width').value
+        self.miss_length = self.get_parameter('miss_length').value
 
-        self.hit_colour = ColorRGBA(r=1.0, g=0.35, b=0.10, a=0.9)
-        self.miss_colour = ColorRGBA(r=0.20, g=0.45, b=0.85, a=0.25)
+        # Shared palette: every sensor draws identically.
+        self.hit_colour = RAY_HIT
+        self.miss_colour = RAY_MISS
+        self.declare_parameter('hit_marker_size', 0.014)
+        self.hit_marker_size = self.get_parameter('hit_marker_size').value
 
         # Sensor data is best effort, and the bridge republishes it as such.
         qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.publisher = self.create_publisher(
             MarkerArray, self.get_parameter('marker_topic').value, 10)
         self.latest = {}
+        # face -> set of zone indices the classifier confirmed as obstacles.
+        self.obstacle_zones = {}
+        # Sensors the power switch has turned off, drawn as an OFF wedge.
+        self.disabled = set()
+        self.create_subscription(
+            UInt8MultiArray, '/tof/obstacle_zones', self.on_zones, 5)
+        self.create_subscription(
+            DiagnosticArray, '/sensors/status', self.on_status, 5)
         self.subscriptions_by_topic = {}
         for index, topic in enumerate(
                 self.get_parameter('cloud_topics').value):
             self.subscriptions_by_topic[topic] = self.create_subscription(
                 PointCloud2,
                 topic,
-                lambda message, marker_id=index: self.latest.__setitem__(
-                    marker_id, message),
+                lambda message, marker_id=index, name=topic:
+                    self.latest.__setitem__(marker_id, (name, message)),
                 qos,
             )
         self.timer = self.create_timer(
             1.0 / self.get_parameter('publish_rate').value, self.publish_rays)
+
+    def on_zones(self, message):
+        if not message.layout.dim:
+            return
+        faces = message.layout.dim[0].label.split(',')
+        zones = message.layout.dim[1].size
+        self.obstacle_zones = {
+            face: {
+                zone for zone in range(zones)
+                if message.data[row * zones + zone]
+            }
+            for row, face in enumerate(faces)
+        }
+
+    def on_status(self, message):
+        self.disabled = {
+            status.name for status in message.status
+            if status.message == 'off'
+        }
 
     def zone_endpoints(self, message):
         """Return one contact point per zone, None where the zone missed.
@@ -169,40 +209,91 @@ class ToFRayMarkers(Node):
                 endpoints.append(Point(x=float(x), y=float(y), z=float(z)))
         return endpoints
 
-    def sensor_marker(self, message, marker_id):
-        """Turn one sensor's cloud into a full grid of ray segments."""
-        marker = Marker()
-        # Frame from the cloud, stamp left at zero so RViz uses the latest
-        # transform it has rather than one it may not have yet.
-        marker.header.frame_id = message.header.frame_id
-        marker.ns = 'tof_rays'
-        marker.id = marker_id
-        marker.type = Marker.LINE_LIST
-        marker.action = Marker.ADD
-        marker.scale.x = self.line_width
-        marker.pose.orientation.w = 1.0
+    def sensor_markers(self, topic, message, marker_id):
+        """Turn one sensor's cloud into its rays and its obstacle hits.
 
-        for direction, endpoint in zip(
-                self.directions, self.zone_endpoints(message)):
-            marker.points.append(scaled(direction, self.min_range))
+        A ray is drawn orange only when the classifier confirmed its zone as
+        an obstacle, not whenever it returns: the downward rows hit the floor
+        constantly, and colouring every return would colour everything.
+        """
+        face = face_of(topic)
+        frame = message.header.frame_id or 'tof_{}_link'.format(face)
+        if face in self.disabled:
+            return self.off_markers(frame, marker_id)
+        alerts = self.obstacle_zones.get(face, set())
+
+        rays = self.marker(frame, 'tof_rays', marker_id, Marker.LINE_LIST)
+        rays.scale.x = self.line_width
+        hits = self.marker(
+            frame, 'tof_hits', marker_id, Marker.SPHERE_LIST)
+        hits.scale.x = hits.scale.y = hits.scale.z = self.hit_marker_size
+        hits.color = HIT_ALERT
+
+        for zone, (direction, endpoint) in enumerate(
+                zip(self.directions, self.zone_endpoints(message))):
+            rays.points.append(scaled(direction, self.min_range))
             if endpoint is None:
-                marker.points.append(scaled(direction, self.max_range))
+                rays.points.append(scaled(direction, self.miss_length))
                 colour = self.miss_colour
+            elif zone in alerts:
+                rays.points.append(endpoint)
+                hits.points.append(endpoint)
+                colour = RAY_ALERT
             else:
-                marker.points.append(endpoint)
+                rays.points.append(endpoint)
                 colour = self.hit_colour
-            marker.colors.append(colour)
-            marker.colors.append(colour)
+            rays.colors.append(colour)
+            rays.colors.append(colour)
+        # An empty SPHERE_LIST is still sent, so a hit that clears is removed.
+        return [rays, hits]
+
+    def off_markers(self, frame, marker_id, radius=0.18):
+        """Outline a switched-off sensor's field of view and label it OFF."""
+        half = self.half_span
+        outline = self.marker(
+            frame, 'tof_rays', marker_id, Marker.LINE_STRIP)
+        outline.scale.x = 0.003
+        outline.color = SENSOR_OFF
+        outline.points.append(Point())
+        steps = 12
+        for step in range(steps + 1):
+            angle = -half + 2.0 * half * step / steps
+            outline.points.append(Point(
+                x=radius * math.cos(angle), y=radius * math.sin(angle)))
+        outline.points.append(Point())
+        label = self.marker(
+            frame, 'tof_hits', marker_id, Marker.TEXT_VIEW_FACING)
+        label.pose.position.x = radius + 0.04
+        label.scale.z = 0.03
+        label.color = LABEL
+        label.text = 'OFF'
+        return [outline, label]
+
+    @staticmethod
+    def marker(frame, namespace, marker_id, kind):
+        """A marker in ``frame``, stamped zero so RViz uses the latest TF."""
+        marker = Marker()
+        marker.header.frame_id = frame
+        marker.ns = namespace
+        marker.id = marker_id
+        marker.type = kind
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
         return marker
 
     def publish_rays(self):
         """Publish the whole ring as one array, on the timer."""
         if not self.latest:
             return
-        self.publisher.publish(MarkerArray(markers=[
-            self.sensor_marker(message, marker_id)
-            for marker_id, message in sorted(self.latest.items())
-        ]))
+        markers = []
+        for marker_id, (topic, message) in sorted(self.latest.items()):
+            markers.extend(self.sensor_markers(topic, message, marker_id))
+        self.publisher.publish(MarkerArray(markers=markers))
+
+
+def face_of(topic):
+    """'/tof/front_left/points' -> 'front_left'."""
+    return topic.strip('/').split('/')[-2]
 
 
 def main(args=None):
