@@ -293,6 +293,30 @@ Visualization Manager:
           Value: false
       Enabled: true
       Name: ToF ring
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Bug navigation
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /bug_navigator/markers
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: false
+      Name: Speed level
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /speed_governor/marker
+      Value: false
     - Class: rviz_default_plugins/Odometry
       Covariance:
         Value: false

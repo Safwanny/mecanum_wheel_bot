@@ -29,9 +29,12 @@ import sys
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 from PyQt5.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout,
-    QWidget)
+    QApplication, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QVBoxLayout, QWidget)
+from std_msgs.msg import String
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 import rclpy
@@ -228,8 +231,50 @@ class RobotView(QWidget):
         self.update()
 
 
+LEVEL_COLOURS = {
+    'cruise': palette.CLEAR, 'caution': palette.CAUTION,
+    'slow': palette.CAUTION, 'crawl': palette.CRITICAL,
+    'stop': palette.CRITICAL,
+}
+
+
+class Telemetry(QWidget):
+    """Live readouts: motion from odometry, the governor, the navigator.
+
+    These used to be text in RViz; kept here they do not cover the scene.
+    """
+
+    FIELDS = (
+        ('speed', 'Speed'), ('velocity', 'Velocity (body)'),
+        ('heading', 'Heading'), ('position', 'Position (odom)'),
+        ('level', 'Speed level'), ('state', 'Navigator'),
+        ('goal', 'To goal'),
+    )
+
+    def __init__(self):
+        super().__init__()
+        grid = QGridLayout(self)
+        grid.setHorizontalSpacing(18)
+        self.values = {}
+        for index, (key, name) in enumerate(self.FIELDS):
+            caption = QLabel(name.upper())
+            caption.setStyleSheet('color: #8A94A0; font: 8pt;')
+            value = QLabel('—')
+            value.setStyleSheet('font: bold 11pt;')
+            row, column = divmod(index, 4)
+            grid.addWidget(caption, row * 2, column)
+            grid.addWidget(value, row * 2 + 1, column)
+            self.values[key] = value
+
+    def set(self, key, text, colour=None):
+        self.values[key].setText(text)
+        if colour is not None:
+            self.values[key].setStyleSheet(
+                'font: bold 11pt; color: {};'.format(colour))
+
+
 class SensorPanel(QWidget):
-    """Window: the robot view, all-on/all-off, and a status line."""
+    """Window: the robot view, all-on/all-off, telemetry, a status line."""
 
     def __init__(self, node):
         super().__init__()
@@ -251,14 +296,53 @@ class SensorPanel(QWidget):
             row.addWidget(widget)
         row.addStretch()
         row.addWidget(self.status)
+        self.telemetry = Telemetry()
         layout = QVBoxLayout(self)
         layout.addWidget(self.view)
+        layout.addWidget(self.telemetry)
         layout.addLayout(row)
+        self.pose = None
+        self.goal = None
 
         self.client = node.create_client(
             SetParameters, '/sensor_power/set_parameters')
         node.create_subscription(
             DiagnosticArray, '/sensors/status', self.on_status, 5)
+        node.create_subscription(
+            Odometry, '/odometry/filtered', self.on_odometry, 10)
+        node.create_subscription(
+            String, '/speed_governor/level', self.on_level, 10)
+        node.create_subscription(
+            String, '/bug_navigator/state', self.on_state, 10)
+        node.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
+
+    def on_odometry(self, message):
+        pose, twist = message.pose.pose, message.twist.twist
+        q = pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.pose = (pose.position.x, pose.position.y)
+        vx, vy = twist.linear.x, twist.linear.y
+        show = self.telemetry.set
+        show('speed', '{:.2f} m/s'.format(math.hypot(vx, vy)))
+        show('velocity', '{:+.2f}, {:+.2f}  ω {:+.2f}'.format(
+            vx, vy, twist.angular.z))
+        show('heading', '{:+.1f}°'.format(math.degrees(yaw)))
+        show('position', '{:+.2f}, {:+.2f} m'.format(*self.pose))
+        if self.goal is not None:
+            show('goal', '{:.2f} m'.format(math.dist(self.pose, self.goal)))
+
+    def on_level(self, message):
+        level, _, cap = message.data.partition(' ')
+        self.telemetry.set(
+            'level', '{}  ≤ {} m/s'.format(level.upper(), cap or '?'),
+            LEVEL_COLOURS.get(level, TEXT.name()))
+
+    def on_state(self, message):
+        self.telemetry.set('state', message.data.replace('_', ' ').upper())
+
+    def on_goal(self, message):
+        self.goal = (message.pose.position.x, message.pose.position.y)
 
     def on_status(self, message):
         state = {}
