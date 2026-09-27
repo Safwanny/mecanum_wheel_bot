@@ -16,11 +16,13 @@ Visualization Manager:
       Name: Robot Model
       Value: true
     - Class: rviz_default_plugins/TF
+      Enabled: false
+      Marker Scale: 0.15
       Name: TF
-      Show Arrows: true
+      Show Arrows: false
       Show Axes: true
-      Show Names: true
-      Value: true
+      Show Names: false
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -30,7 +32,7 @@ Visualization Manager:
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/LaserScan
-      Color: 255; 80; 40
+      Color: 170; 140; 255
       Color Transformer: FlatColor
       Decay Time: 0.25
       Enabled: true
@@ -47,245 +49,275 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /scan
       Use Fixed Frame: true
-      Use rainbow: true
+      Use rainbow: false
       Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 255; 220; 60
-      Color Transformer: FlatColor
-      Decay Time: 0.2
+    - Class: rviz_common/Group
+      Displays:
+        - Class: rviz_common/Group
+          Displays:
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Front
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/front/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Front Left
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/front_left/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Left
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/left/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Rear Left
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/rear_left/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Rear
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/rear/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Rear Right
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/rear_right/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Right
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/right/points
+              Use Fixed Frame: true
+              Value: true
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Class: rviz_default_plugins/PointCloud2
+              Color: 200; 210; 220
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: true
+              Name: Front Right
+              Position Transformer: XYZ
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.004
+              Style: Points
+              Topic:
+                Depth: 5
+                Durability Policy: Volatile
+                History Policy: Keep Last
+                Reliability Policy: Best Effort
+                Value: /tof/front_right/points
+              Use Fixed Frame: true
+              Value: true
+          Enabled: true
+          Name: Raw returns (8 sensors)
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: Rays
+          Namespaces:
+            {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tof/rays
+          Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: Scene shapes
+          Namespaces:
+            {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tof/shapes
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Class: rviz_default_plugins/PointCloud2
+          Color: 240; 244; 248
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: false
+          Name: Obstacle points
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 4
+          Size (m): 0.012
+          Style: Spheres
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Best Effort
+            Value: /tof/obstacles
+          Use Fixed Frame: true
+          Value: false
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Class: rviz_default_plugins/PointCloud2
+          Color: 48; 164; 108
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: false
+          Name: Floor points
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 2
+          Size (m): 0.004
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Best Effort
+            Value: /tof/floor
+          Use Fixed Frame: true
+          Value: false
       Enabled: true
-      Name: ToF Front
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/front/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 120; 220; 255
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Rear
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/rear/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 190; 130; 255
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Left
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/left/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 130; 255; 160
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Right
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/right/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 255; 150; 90
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Front Left
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/front_left/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 150; 255; 220
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Front Right
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/front_right/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 220; 160; 255
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Rear Left
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/rear_left/points
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 200; 255; 120
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF Rear Right
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 4
-      Size (m): 0.004
-      Style: Points
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/rear_right/points
-      Use Fixed Frame: true
-      Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: ToF Rays
-      Namespaces:
-        {}
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /tof/rays
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 255; 170; 0
-      Color Transformer: FlatColor
-      Decay Time: 0.2
-      Enabled: true
-      Name: ToF OBSTACLES
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 8
-      Size (m): 0.02
-      Style: Spheres
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/obstacles
-      Use Fixed Frame: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Class: rviz_default_plugins/PointCloud2
-      Color: 90; 190; 90
-      Color Transformer: FlatColor
-      Decay Time: 0.2
+      Name: ToF ring
+    - Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: false
       Enabled: false
-      Name: ToF floor (debug)
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 2
-      Size (m): 0.004
-      Style: Points
+      Keep: 1
+      Name: Raw Wheel Odometry
+      Shape:
+        Alpha: 1
+        Axes Length: 0.12
+        Axes Radius: 0.006
+        Value: Axes
       Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /tof/floor
-      Use Fixed Frame: true
+        Value: /mobile_base_controller/odometry
       Value: false
     - Class: rviz_default_plugins/Odometry
       Covariance:
         Value: false
-      Keep: 1
-      Name: Raw Wheel Odometry
-      Shape: Axes
-      Topic:
-        Value: /mobile_base_controller/odometry
-      Value: true
-    - Class: rviz_default_plugins/Odometry
-      Covariance:
-        Value: true
+      Enabled: true
       Keep: 1
       Name: Filtered Odometry
-      Shape: Axes
+      Shape:
+        Alpha: 1
+        Axes Length: 0.12
+        Axes Radius: 0.006
+        Value: Axes
       Topic:
         Value: /odometry/filtered
       Value: true
@@ -294,7 +326,7 @@ Visualization Manager:
       Color: 0; 255; 255
       Enabled: true
       Line Style: Lines
-      Line Width: 0.03
+      Line Width: 0.008
       Name: Raw Wheel Trajectory
       Pose Style: None
       Topic:
@@ -305,7 +337,7 @@ Visualization Manager:
       Color: 255; 220; 0
       Enabled: true
       Line Style: Lines
-      Line Width: 0.03
+      Line Width: 0.008
       Name: Filtered Trajectory
       Pose Style: None
       Topic:
@@ -337,15 +369,15 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.0
+      Distance: 1.8
       Focal Point:
         X: 0
         Y: 0
-        Z: 0.05
+        Z: 0.03
       Name: Odom Trajectory View
       Near Clip Distance: 0.005
-      Pitch: 0.65
-      Target Frame: <Fixed Frame>
+      Pitch: 0.95
+      Target Frame: base_footprint
       Value: Orbit (rviz)
       Yaw: 0.75
     Saved: ~

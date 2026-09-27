@@ -483,6 +483,9 @@ def generate_launch_description():
             DeclareLaunchArgument('tof_markers', default_value='true'),
             # The classifier is what feeds the costmaps; the markers only draw.
             DeclareLaunchArgument('tof_classifier', default_value='true'),
+            DeclareLaunchArgument('tof_shapes', default_value='true'),
+            # The sensor power window; the switchboard itself always runs.
+            DeclareLaunchArgument('sensor_panel', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
             # Controller spawners start RViz from a delayed process-exit
             # handler. Capture this include's value now so a later include
@@ -597,6 +600,18 @@ def generate_launch_description():
                     '/tof/rear_right/points@sensor_msgs/msg/PointCloud2'
                     '[gz.msgs.PointCloudPacked',
                 ],
+                # The LiDAR and ToF sensors land under /sensors/raw; the
+                # sensor_power switchboard relays the enabled ones onto the
+                # topics everything else reads.
+                remappings=[
+                    (topic, '/sensors/raw' + topic)
+                    for topic in ['/scan'] + [
+                        f'/tof/{face}/points' for face in (
+                            'front', 'rear', 'left', 'right',
+                            'front_left', 'front_right',
+                            'rear_left', 'rear_right')
+                    ]
+                ],
                 parameters=[
                     {
                         'use_sim_time': LaunchConfiguration(
@@ -608,11 +623,52 @@ def generate_launch_description():
             ),
             Node(
                 package='mobile_base_tools',
+                executable='sensor_power',
+                name='sensor_power',
+                parameters=[
+                    {
+                        'use_sim_time': LaunchConfiguration(
+                            'use_sim_time'
+                        )
+                    }
+                ],
+                output='screen',
+            ),
+            Node(
+                package='mobile_base_tools',
+                executable='sensor_panel',
+                name='sensor_panel',
+                condition=IfCondition(
+                    LaunchConfiguration('sensor_panel')
+                ),
+                output='screen',
+            ),
+            Node(
+                package='mobile_base_tools',
                 executable='tof_floor_classifier',
                 name='tof_floor_classifier',
                 condition=IfCondition(
                     LaunchConfiguration('tof_classifier')
                 ),
+                parameters=[
+                    {
+                        'use_sim_time': LaunchConfiguration(
+                            'use_sim_time'
+                        )
+                    }
+                ],
+                output='screen',
+            ),
+            Node(
+                package='mobile_base_tools',
+                executable='tof_scene_shapes',
+                name='tof_scene_shapes',
+                # Shapes are drawn from the classifier's output, so they only
+                # run alongside it.
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('tof_classifier'), "' == 'true' and '",
+                    LaunchConfiguration('tof_shapes'), "' == 'true'",
+                ])),
                 parameters=[
                     {
                         'use_sim_time': LaunchConfiguration(
