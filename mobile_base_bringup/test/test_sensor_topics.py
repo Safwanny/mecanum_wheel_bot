@@ -56,6 +56,7 @@ def generate_test_description():
             'world': 'my_world',
             'gui': 'false',
             'rviz': 'false',
+            'sensor_panel': 'false',
             'use_sim_time': 'true',
             'render_engine': 'ogre',
         }.items(),

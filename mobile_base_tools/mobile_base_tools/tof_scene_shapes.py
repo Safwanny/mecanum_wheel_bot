@@ -145,7 +145,8 @@ class ToFSceneShapes(Node):
         self.declare_parameter('hold_frames', 4)
         self.declare_parameter('smoothing', 0.3)
         self.declare_parameter('publish_floor', True)
-        self.declare_parameter('publish_labels', True)
+        # Off by default: one label per shape crowds the view.
+        self.declare_parameter('publish_labels', False)
         self.declare_parameter('floor_bins', 48)
 
         value = self.get_parameter

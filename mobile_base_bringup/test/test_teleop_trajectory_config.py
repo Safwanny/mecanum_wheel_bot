@@ -83,7 +83,8 @@ def main():
     assert 'Class: rviz_default_plugins/LaserScan' in rviz
     assert '/scan' in rviz
     assert 'Show Axes: true' in rviz
-    assert 'Show Names: true' in rviz
+    # Frame labels are off: on a 26 cm robot they bury the ToF displays.
+    assert 'Show Names: false' in rviz
     assert 'Topic:' in rviz and '/mobile_base_controller/odometry' in rviz
     assert '/camera/image_raw' in rviz
     assert 'Keep: 1' in rviz
