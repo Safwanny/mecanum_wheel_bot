@@ -303,3 +303,77 @@ def floor_candidates(origin, directions, ranges, rows, zones, max_range):
             origin[2] + measured * direction[2],
         ))
     return points
+
+
+class MarkRanges:
+    """How far out each kind of return may be marked, measured horizontally.
+
+    One limit for everything was either too far for low obstacles or too
+    short for walls, because each is seen by different rows:
+
+    ``low`` 0.4 m - obstacles too short to clear the floor band are caught
+    only by the "ray stopped short of the floor" test, and the shallowest
+    downward row meets the floor at 0.435 m. Past that nothing can catch them.
+
+    ``obstacle`` 1.0 m - taller obstacles are seen by the +3.75 degree row,
+    whose centre line climbs above the 99.5 mm roof at 1.083 m. Beyond it a
+    return has no height the robot could hit.
+
+    ``wall`` 2.0 m - a surface that fills a column of upward zones at one
+    distance stands on the floor however far away it is, so its reach is set
+    by the sensor, not the geometry. 2 m leaves margin for ambient light and
+    dark surfaces against the VL53L7CX's 3.5 m best case.
+    """
+
+    def __init__(self, low=0.4, obstacle=1.0, wall=2.0, wall_min_zones=2,
+                 wall_tolerance=0.05):
+        self.low = low
+        self.obstacle = obstacle
+        self.wall = wall
+        self.wall_min_zones = wall_min_zones
+        self.wall_tolerance = wall_tolerance
+
+
+def select_marks(geometry, limits, origin, results, zones):
+    """Choose which zones of one sensor to mark: ``[(index, point), ...]``.
+
+    ``results`` is ``classify_zone``'s output per zone, row major with row 0
+    at the bottom. A column of upward zones returning at one horizontal
+    distance, starting from the lowest upward row, is a wall: something that
+    reaches down at least as far as the ring can see. Those zones are marked
+    out to ``limits.wall`` whatever their height. A return only in the upper
+    rows, with the lowest upward row seeing past it, is an overhang - a table
+    top - and stays unmarked, as before.
+    """
+    def reach(point):
+        return math.hypot(point[0] - origin[0], point[1] - origin[1])
+
+    marks = {}
+    for index, (label, point, residual) in enumerate(results):
+        if label != OBSTACLE or point is None:
+            continue
+        low = residual is None or residual <= geometry.obstacle_min_height
+        if reach(point) <= (limits.low if low else limits.obstacle):
+            marks[index] = point
+
+    first_up = zones // 2
+    for column in range(zones):
+        base = results[first_up * zones + column]
+        if base[0] not in (OBSTACLE, OVERHEAD) or base[1] is None:
+            continue
+        distance = reach(base[1])
+        if distance > limits.wall:
+            continue
+        tolerance = limits.wall_tolerance + 0.03 * distance
+        stack = []
+        for row in range(first_up, zones):
+            index = row * zones + column
+            label, point, _ = results[index]
+            if label not in (OBSTACLE, OVERHEAD) or point is None:
+                break
+            if abs(reach(point) - distance) > tolerance:
+                break
+            stack.append((index, point))
+        if len(stack) >= limits.wall_min_zones:
+            marks.update(stack)
+    return sorted(marks.items())

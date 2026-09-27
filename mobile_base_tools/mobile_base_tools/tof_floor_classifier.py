@@ -46,16 +46,18 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2, PointField
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import Header
+from std_msgs.msg import (
+    Header, MultiArrayDimension, MultiArrayLayout, UInt8MultiArray)
 import tf2_ros
 
 from mobile_base_tools.tof_floor_model import (
     FLOOR,
-    OBSTACLE,
     FloorGeometry,
+    MarkRanges,
     classify_zone,
     fit_plane,
     floor_candidates,
+    select_marks,
 )
 from mobile_base_tools.tof_ray_markers import zone_directions
 
@@ -102,6 +104,15 @@ def make_cloud(frame_id, stamp, points):
     )
 
 
+def _mask_layout(faces, zones):
+    """Label the zone mask: dim 0 names the faces in order, dim 1 the zones."""
+    return MultiArrayLayout(dim=[
+        MultiArrayDimension(label=','.join(faces), size=len(faces),
+                            stride=len(faces) * zones),
+        MultiArrayDimension(label='zone', size=zones, stride=zones),
+    ])
+
+
 class ToFFloorClassifier(Node):
     """Classify every ToF zone and publish only what a costmap should mark."""
 
@@ -118,9 +129,12 @@ class ToFFloorClassifier(Node):
         self.declare_parameter('field_of_view', math.radians(60.0))
         self.declare_parameter('min_range', 0.02)
         self.declare_parameter('max_range', 3.5)
-        # Marking range. Past 1.083 m every ray in this ring clears the robot's
-        # own 99.5 mm roof, so nothing beyond that could be an obstacle to it.
-        self.declare_parameter('mark_max_range', 0.8)
+        # Marking range per kind of return; see MarkRanges for why each is
+        # where it is.
+        self.declare_parameter('low_obstacle_max_range', 0.4)
+        self.declare_parameter('obstacle_max_range', 1.0)
+        self.declare_parameter('wall_max_range', 2.0)
+        self.declare_parameter('wall_min_zones', 2)
         self.declare_parameter('robot_height', 0.0995)
         self.declare_parameter('floor_tolerance', 0.020)
         self.declare_parameter('obstacle_min_height', 0.025)
@@ -152,7 +166,11 @@ class ToFFloorClassifier(Node):
         self.directions = zone_directions(
             self.zones, field_of_view / 2.0 - zone_angle / 2.0)
         self.floor_rows = set(self.get_parameter('floor_rows').value)
-        self.mark_max_range = self.get_parameter('mark_max_range').value
+        self.limits = MarkRanges(
+            low=self.get_parameter('low_obstacle_max_range').value,
+            obstacle=self.get_parameter('obstacle_max_range').value,
+            wall=self.get_parameter('wall_max_range').value,
+            wall_min_zones=self.get_parameter('wall_min_zones').value)
         self.publish_floor = self.get_parameter('publish_floor').value
 
         self.geometry = FloorGeometry(
@@ -201,6 +219,11 @@ class ToFFloorClassifier(Node):
             PointCloud2, '/tof/obstacles', 5)
         self.floor_publisher = self.create_publisher(
             PointCloud2, '/tof/floor', 5)
+        # Which zones are confirmed obstacles, one row per face in ``faces``
+        # order, so the ray markers can colour exactly the rays behind each
+        # mark without repeating the classification.
+        self.zone_publisher = self.create_publisher(
+            UInt8MultiArray, '/tof/obstacle_zones', 5)
 
         self.timer = self.create_timer(
             1.0 / self.get_parameter('publish_rate').value, self.publish)
@@ -273,29 +296,31 @@ class ToFFloorClassifier(Node):
         seen = set()
         floor = []
         for face, origin, directions, ranges in resolved:
-            for index, (direction, measured) in enumerate(
-                    zip(directions, ranges)):
-                label, point, _ = classify_zone(
-                    self.geometry, plane, origin, direction, measured)
-                if point is None:
-                    continue
-                if math.dist(origin, point) > self.mark_max_range:
-                    continue
-                if label == OBSTACLE:
-                    key = (face, index)
-                    seen.add(key)
-                    score, previous = self.tracked.get(key, (0, None))
-                    if previous is not None:
-                        blend = self.smoothing
-                        point = tuple(
-                            blend * new + (1.0 - blend) * old
-                            for new, old in zip(point, previous))
-                    self.tracked[key] = (
-                        min(score + 1, self.hold_frames), point)
-                elif label == FLOOR and self.publish_floor:
-                    floor.append(point)
+            results = [
+                classify_zone(self.geometry, plane, origin, direction, measured)
+                for direction, measured in zip(directions, ranges)
+            ]
+            if self.publish_floor:
+                floor.extend(
+                    point for label, point, _ in results
+                    if label == FLOOR and point is not None
+                    and math.dist(origin, point) <= self.limits.obstacle)
+            for index, point in select_marks(
+                    self.geometry, self.limits, origin, results, self.zones):
+                key = (face, index)
+                seen.add(key)
+                score, previous = self.tracked.get(key, (0, None))
+                if previous is not None:
+                    blend = self.smoothing
+                    point = tuple(
+                        blend * new + (1.0 - blend) * old
+                        for new, old in zip(point, previous))
+                self.tracked[key] = (min(score + 1, self.hold_frames), point)
 
         obstacles = []
+        zones = self.zones * self.zones
+        mask = [0] * (len(self.faces) * zones)
+        row = {face: index for index, face in enumerate(self.faces)}
         for key, (score, point) in list(self.tracked.items()):
             if key not in seen:
                 score -= 1
@@ -305,6 +330,9 @@ class ToFFloorClassifier(Node):
                 self.tracked[key] = (score, point)
             if score >= self.confirm_frames:
                 obstacles.append(point)
+                face, zone = key
+                if face in row:
+                    mask[row[face] * zones + zone] = 1
 
         stamp = self.get_clock().now().to_msg()
         self.obstacle_publisher.publish(
@@ -312,6 +340,8 @@ class ToFFloorClassifier(Node):
         if self.publish_floor:
             self.floor_publisher.publish(
                 make_cloud(self.base_frame, stamp, floor))
+        self.zone_publisher.publish(UInt8MultiArray(
+            layout=_mask_layout(self.faces, zones), data=mask))
 
 
 def main(args=None):

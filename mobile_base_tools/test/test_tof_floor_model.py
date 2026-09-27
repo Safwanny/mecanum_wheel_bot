@@ -251,3 +251,44 @@ def test_floor_candidates_skip_missing_and_upward_rays():
         ORIGIN, directions, ranges, rows=set(range(8)), zones=1,
         max_range=3.5)
     assert points == []
+
+
+def _grid(zones=8):
+    return [(FREE, None, None)] * (zones * zones)
+
+
+def test_marks_respect_the_range_of_each_kind():
+    from mobile_base_tools.tof_floor_model import MarkRanges, select_marks
+    geometry, limits, origin = FloorGeometry(), MarkRanges(), (0.0, 0.0, 0.0)
+    results = _grid()
+    # Low (caught by shortfall only) at 0.3 and 0.6 m; tall at 0.9 and 1.2 m.
+    results[0] = (OBSTACLE, (0.3, 0.0, 0.01), 0.01)
+    results[1] = (OBSTACLE, (0.6, 0.0, 0.01), 0.01)
+    results[2] = (OBSTACLE, (0.9, 0.0, 0.05), 0.05)
+    results[3] = (OBSTACLE, (1.2, 0.0, 0.05), 0.05)
+    marked = [index for index, _ in select_marks(
+        geometry, limits, origin, results, 8)]
+    assert marked == [0, 2]
+
+
+def test_a_column_at_one_distance_is_a_wall_out_to_two_metres():
+    from mobile_base_tools.tof_floor_model import MarkRanges, select_marks
+    geometry, limits, origin = FloorGeometry(), MarkRanges(), (0.0, 0.0, 0.0)
+    results = _grid()
+    column = 3
+    for row in range(4, 8):
+        results[row * 8 + column] = (
+            OVERHEAD, (1.8, 0.0, 0.1 + 0.2 * row), 0.1 + 0.2 * row)
+    marked = [index for index, _ in select_marks(
+        geometry, limits, origin, results, 8)]
+    assert marked == [row * 8 + column for row in range(4, 8)]
+
+
+def test_an_overhang_is_not_a_wall():
+    from mobile_base_tools.tof_floor_model import MarkRanges, select_marks
+    geometry, limits, origin = FloorGeometry(), MarkRanges(), (0.0, 0.0, 0.0)
+    results = _grid()
+    # A table top: upper rows return, the lowest upward row sees past it.
+    for row in range(5, 8):
+        results[row * 8] = (OVERHEAD, (0.9, 0.0, 0.3), 0.3)
+    assert select_marks(geometry, limits, origin, results, 8) == []

@@ -47,16 +47,17 @@ local_costmap:
           clearing: true
           marking: true
           # Heights are ground referenced: the clouds are published in
-          # base_footprint. Above the robot's own 0.0995 m roof is clearance,
-          # not obstacle, and marking it would refuse doorways it fits through.
+          # base_footprint. The classifier already drops overhangs above the
+          # 0.0995 m roof; what it still publishes above it is wall, confirmed
+          # by a column of zones reaching down to the lowest upward row, so no
+          # height cut here - a far wall is only ever seen above the roof.
           min_obstacle_height: 0.0
-          max_obstacle_height: 0.12
-          # Past 1.083 m every ray in the ring clears that roof, so nothing
-          # beyond it could be an obstacle to this robot. Marking further would
-          # only add 22 cm blobs where the LiDAR already resolves 0.5 degrees.
-          obstacle_max_range: 0.8
+          max_obstacle_height: 1.2
+          # The classifier limits each kind itself: low obstacles 0.4 m, taller
+          # ones 1.0 m, walls 2.0 m. This is the outer bound only.
+          obstacle_max_range: 2.0
           obstacle_min_range: 0.0
-          raytrace_max_range: 1.0
+          raytrace_max_range: 2.2
           raytrace_min_range: 0.0
 
       inflation_layer:

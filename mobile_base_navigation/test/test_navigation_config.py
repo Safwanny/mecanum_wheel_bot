@@ -36,6 +36,11 @@ LIDAR_MAX_RANGE = 4.0
 # robot's own 99.5 mm roof. Nothing marked further out could obstruct it, and
 # the LiDAR already resolves that range 15x finer.
 TOF_MAX_RANGE = 1.083
+# That limit is for obstacles. A wall - a column of zones returning at one
+# distance down to the lowest upward row - stands on the floor however far off,
+# so the classifier marks walls out to 2 m, inside the sensor's 3.5 m.
+TOF_WALL_RANGE = 2.0
+TOF_SENSOR_RANGE = 3.5
 TOF_SOURCES = ('tof_obstacles',)
 
 # Fastest the robot may travel and still stop on an obstacle first seen by the
@@ -236,11 +241,15 @@ def main():
             assert source['topic'] == f'/{name.replace("_", "/", 1)}'
             assert source['data_type'] == 'PointCloud2'
             assert source['marking'] is True
-            assert source['obstacle_max_range'] < TOF_MAX_RANGE
-            assert source['raytrace_max_range'] < TOF_MAX_RANGE
-            # Above the robot's roof is clearance, not obstacle.
+            assert source['obstacle_max_range'] <= TOF_WALL_RANGE
+            assert source['raytrace_max_range'] < TOF_SENSOR_RANGE
+            # Overhangs above the roof are dropped by the classifier; what it
+            # still publishes above the roof is confirmed wall, which past
+            # ~1 m is only ever seen above it. So the cut here must let walls
+            # through: up to where the top row meets a wall at the 2 m wall
+            # range (28.5 mm + 2 m * tan 30 deg, about 1.18 m).
             assert source['max_obstacle_height'] > ROBOT_HEIGHT
-            assert source['max_obstacle_height'] < 2.0 * ROBOT_HEIGHT
+            assert source['max_obstacle_height'] >= 1.2
 
     # Frames. Nav2 defaults robot_base_frame to base_link, which this repo
     # does not use for the odometry chain; the local costmap rolls in odom.
