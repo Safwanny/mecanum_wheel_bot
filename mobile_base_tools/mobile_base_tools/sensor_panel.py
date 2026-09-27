@@ -137,11 +137,6 @@ class RobotView(QWidget):
         painter.setPen(QPen(lidar, 1.5, Qt.DashLine))
         painter.setBrush(QBrush(ring))
         painter.drawEllipse(centre, LIDAR_RANGE * scale, LIDAR_RANGE * scale)
-        painter.setFont(QFont('Sans', 8))
-        painter.setPen(QPen(lidar))
-        painter.drawText(QPointF(centre.x() + 6,
-                                 centre.y() - LIDAR_RANGE * scale + 16),
-                         'LiDAR  {:.1f} m'.format(LIDAR_RANGE))
 
         wedge = TOF_RANGE * scale
         wall = TOF_WALL_RANGE * scale
@@ -186,17 +181,15 @@ class RobotView(QWidget):
             QRectF(centre.x() - BODY_WIDTH * scale / 2,
                    centre.y() - BODY_LENGTH * scale / 2,
                    BODY_WIDTH * scale, BODY_LENGTH * scale), 3, 3)
-        painter.setPen(QPen(TEXT))
-        painter.setFont(QFont('Sans', 8, QFont.Bold))
-        painter.drawText(QRectF(centre.x() - 40, centre.y()
-                                - BODY_LENGTH * scale / 2 - wedge - 18, 80, 14),
-                         Qt.AlignCenter, '▲ FRONT')
-        painter.setFont(QFont('Sans', 8))
-        painter.setPen(QPen(ON))
-        painter.drawText(QRectF(centre.x() - 90, centre.y()
-                                + BODY_LENGTH * scale / 2 + wedge + 4, 180, 14),
-                         Qt.AlignCenter, 'ToF  {:.1f} m  ·  walls {:.1f} m'.format(
-                             TOF_RANGE, TOF_WALL_RANGE))
+        # Front marker: a small arrow on the body itself, no text to collide.
+        tip_y = centre.y() - BODY_LENGTH * scale / 2 + 3
+        arrow = QPainterPath(QPointF(centre.x(), tip_y))
+        arrow.lineTo(centre.x() - 5, tip_y + 8)
+        arrow.lineTo(centre.x() + 5, tip_y + 8)
+        arrow.closeSubpath()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(TEXT))
+        painter.drawPath(arrow)
 
     def resizeEvent(self, _event):
         centre, radius = self.centre_and_scale()
@@ -255,6 +248,9 @@ class Telemetry(QWidget):
         super().__init__()
         grid = QGridLayout(self)
         grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(2)
+        for column in range(4):
+            grid.setColumnStretch(column, 1)
         self.values = {}
         for index, (key, name) in enumerate(self.FIELDS):
             caption = QLabel(name.upper())
@@ -262,8 +258,8 @@ class Telemetry(QWidget):
             value = QLabel('—')
             value.setStyleSheet('font: bold 11pt;')
             row, column = divmod(index, 4)
-            grid.addWidget(caption, row * 2, column)
-            grid.addWidget(value, row * 2 + 1, column)
+            grid.addWidget(caption, row * 2, column, Qt.AlignLeft)
+            grid.addWidget(value, row * 2 + 1, column, Qt.AlignLeft)
             self.values[key] = value
 
     def set(self, key, text, colour=None):
@@ -279,11 +275,11 @@ class SensorPanel(QWidget):
     def __init__(self, node):
         super().__init__()
         self.node = node
-        self.setWindowTitle('Sensor power')
+        self.setWindowTitle('Mobile base control panel')
         self.setStyleSheet('background: {}; color: {};'.format(
             BACKGROUND.name(), TEXT.name()))
         self.view = RobotView(self.toggle)
-        self.status = QLabel('Waiting for sensor_power…')
+        self.status = QLabel('Waiting for the robot…')
         all_on = QPushButton('All ToF on')
         all_off = QPushButton('All ToF off')
         all_on.clicked.connect(lambda: self.set_all(True))
@@ -297,8 +293,15 @@ class SensorPanel(QWidget):
         row.addStretch()
         row.addWidget(self.status)
         self.telemetry = Telemetry()
+        legend = QLabel(
+            '▲ front is up  ·  drawn to scale:  LiDAR {:.1f} m  ·  ToF '
+            'obstacles {:.1f} m  ·  walls {:.1f} m'.format(
+                LIDAR_RANGE, TOF_RANGE, TOF_WALL_RANGE))
+        legend.setAlignment(Qt.AlignCenter)
+        legend.setStyleSheet('color: #8A94A0; font: 8pt;')
         layout = QVBoxLayout(self)
         layout.addWidget(self.view)
+        layout.addWidget(legend)
         layout.addWidget(self.telemetry)
         layout.addLayout(row)
         self.pose = None

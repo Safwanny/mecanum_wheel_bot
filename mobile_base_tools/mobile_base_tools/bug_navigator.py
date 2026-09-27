@@ -59,8 +59,9 @@ class BugNavigator(Node):
         value('cmd_out', '/governor/cmd_vel')
         value('rate', 20.0)
         value('speed', 0.5)
-        value('standoff', 0.10)
-        value('hit_distance', 0.20)
+        value('standoff', 0.30)
+        value('min_standoff', 0.05)
+        value('hit_distance', 0.35)
         value('goal_tolerance', 0.10)
         value('line_tolerance', 0.05)
         value('side', 'left')
@@ -68,6 +69,7 @@ class BugNavigator(Node):
         get = self.get_parameter
         self.bug = Bug2(
             speed=get('speed').value, standoff=get('standoff').value,
+            min_standoff=get('min_standoff').value,
             hit_distance=get('hit_distance').value,
             goal_tolerance=get('goal_tolerance').value,
             line_tolerance=get('line_tolerance').value,

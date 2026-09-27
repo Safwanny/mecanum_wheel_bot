@@ -34,10 +34,15 @@ measured on hardware), a 5 cm margin and a safety factor of 2.
 **Bug2, holonomic.** Heading is held constant; the robot only translates.
 Moving to the goal it slides along the start-goal line (the m-line). Meeting
 an obstacle it follows the boundary with a vector field - tangent to the
-nearest obstacle point plus a correction toward a fixed standoff - which any
+nearest obstacle point plus a correction toward a standoff - which any
 face of the ring can serve, because the ring is 360 degrees. It leaves the
 boundary where Bug2 does: back on the m-line, closer to the goal than where it
 hit, with the way to the goal clear.
+
+The standoff adapts to the space. With the far side open the robot keeps a
+comfortable ``standoff`` from the wall it follows; as the far side closes in -
+a corridor, a gap - it moves towards the middle, down to ``min_standoff``. It
+only gets close to things when there is no room not to.
 """
 
 import math
@@ -215,12 +220,14 @@ class Bug2:
     robot's right, as a person walking anticlockwise round a room would.
     """
 
-    def __init__(self, speed=0.5, standoff=0.10, hit_distance=0.20,
+    def __init__(self, speed=0.5, standoff=0.30, min_standoff=0.05,
+                 hit_distance=0.35,
                  goal_tolerance=0.10, line_tolerance=0.05, leave_gain=0.10,
                  gain=2.0, follow_range=0.8, side='left',
                  contact_window=math.radians(100.0)):
         self.speed = speed
         self.standoff = standoff
+        self.min_standoff = min_standoff
         self.hit_distance = hit_distance
         self.goal_tolerance = goal_tolerance
         self.line_tolerance = line_tolerance
@@ -303,9 +310,28 @@ class Bug2:
             return self.speed * gx, self.speed * gy
         clearance, nx, ny = found
         self.contact = (nx, ny)
+        target = self.target_standoff(points, nx, ny, clearance)
         # Tangent: the obstacle direction turned a quarter, towards `side`.
         tx, ty = -self.turn * ny, self.turn * nx
-        pull = max(-1.0, min(1.0, self.gain * (clearance - self.standoff)))
+        pull = max(-1.0, min(1.0, self.gain * (clearance - target)))
         vx, vy = tx + pull * nx, ty + pull * ny
         norm = math.hypot(vx, vy)
         return self.speed * vx / norm, self.speed * vy / norm
+
+    def target_standoff(self, points, nx, ny, clearance):
+        """How far to keep from the followed boundary, given the far side.
+
+        The far side is whatever lies within 60 degrees of straight away from
+        the boundary. Open: keep ``standoff``. Narrowing: take the middle of
+        the space, never less than ``min_standoff``.
+        """
+        limit = math.cos(math.radians(60.0))
+        away = [
+            p for p in points
+            if -(p[0] * nx + p[1] * ny) >= limit * math.hypot(p[0], p[1])
+        ]
+        found = nearest_clearance(away)
+        if found is None:
+            return self.standoff
+        room = clearance + found[0]
+        return max(self.min_standoff, min(self.standoff, room / 2.0))

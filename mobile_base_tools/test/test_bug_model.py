@@ -180,3 +180,26 @@ def test_a_squeeze_slows_the_robot_even_with_the_way_ahead_clear():
     assert levels.squeeze(side_clearance(posts, 1.0, 0.0)) == SLOW
     assert levels.squeeze(0.04) == CRAWL
     assert levels.squeeze(0.5) == CRUISE
+
+
+def test_standoff_is_generous_in_the_open_and_centres_when_narrow():
+    bug = Bug2()
+    wall = [(x / 10.0, -0.40, 0.05) for x in range(-5, 6)]  # right side
+    # Open on the left: keep the full standoff.
+    assert bug.target_standoff(wall, 0.0, -1.0, 0.29) == bug.standoff
+    # A wall 0.25 m off the left side as well: take the middle.
+    corridor = wall + [(x / 10.0, 0.36, 0.05) for x in range(-5, 6)]
+    target = bug.target_standoff(corridor, 0.0, -1.0, 0.29)
+    assert target == pytest.approx((0.29 + 0.25) / 2.0, abs=0.02)
+    # Barely wider than the body: never below the minimum.
+    tight = wall + [(x / 10.0, -0.25, 0.05) for x in range(-5, 6)]
+    assert bug.target_standoff(
+        tight + [(0.0, 0.13, 0.05)], 0.0, -1.0, 0.02) == bug.min_standoff
+
+
+def test_following_in_the_open_keeps_its_distance():
+    box = (1.0, -0.4, 1.4, 0.4)
+    path, state = drive(Bug2(speed=0.3), (0.0, 0.0, 0.0), (2.5, 0.0), box)
+    assert state == ARRIVED
+    # Nothing else around, so it never closes to the minimum.
+    assert clearance(path, box) > 0.13 + 0.15

@@ -27,9 +27,11 @@ bug_navigator:
     cmd_out: /governor/cmd_vel
     rate: 20.0
     speed: 0.5               # asked for; the governor decides what is allowed
-    standoff: 0.10           # m from the body face while following a boundary;
-                             # small so the robot follows into gaps it fits
-    hit_distance: 0.20       # m clear ahead below which a boundary is met
+    standoff: 0.30           # m kept from a followed boundary when there is room
+    min_standoff: 0.05       # m it may close to when a passage narrows; in
+                             # between it takes the middle of the space
+    hit_distance: 0.35       # m clear ahead below which a boundary is met;
+                             # a gap it fits leaves the corridor clear, so no hit
     goal_tolerance: 0.10
     line_tolerance: 0.05     # m either side of the m-line; odometry drifts
     side: left               # keep obstacles on the right
