@@ -33,12 +33,12 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 from mobile_base_tools import tof_palette as palette
 from mobile_base_tools.bug_model import (
-    ARRIVED, DRIVING, STUCK, UNREACHABLE, Bug2)
+    ARRIVED, DRIVING, IDLE, STUCK, UNREACHABLE, Bug2)
 
 
 def yaw_of(q):
@@ -57,6 +57,9 @@ class BugNavigator(Node):
         super().__init__('bug_navigator')
         value = self.declare_parameter
         value('cmd_out', '/governor/cmd_vel')
+        # /goal_pose on its own; the supervisor moves it aside when Nav2
+        # owns /goal_pose and DistBug is only the fallback.
+        value('goal_topic', '/goal_pose')
         value('rate', 20.0)
         value('speed', 0.5)
         value('standoff', 0.30)
@@ -96,7 +99,10 @@ class BugNavigator(Node):
             Odometry, '/odometry/filtered', self.on_odometry, 10)
         self.create_subscription(
             PointCloud2, '/tof/obstacles', self.on_cloud, 5)
-        self.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
+        self.create_subscription(
+            PoseStamped, get('goal_topic').value, self.on_goal, 10)
+        self.create_subscription(
+            Empty, '/bug_navigator/cancel', self.on_cancel, 10)
         self.create_timer(1.0 / get('rate').value, self.tick)
 
     def on_odometry(self, message):
@@ -126,6 +132,19 @@ class BugNavigator(Node):
             self.pending = goal
             return
         self.start_run(goal)
+
+    def on_cancel(self, _message):
+        """Drop the current run and stop; the supervisor takes over."""
+        was_driving = self.bug.state in DRIVING
+        self.bug.state = IDLE
+        self.pending = None
+        if was_driving:
+            stop = TwistStamped()
+            stop.header.stamp = self.get_clock().now().to_msg()
+            stop.header.frame_id = 'base_footprint'
+            self.publisher.publish(stop)
+        self.state_publisher.publish(String(data=IDLE))
+        self.get_logger().info('run cancelled')
 
     def start_run(self, goal):
         self.heading = self.pose[2]

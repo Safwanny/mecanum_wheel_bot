@@ -1,0 +1,19 @@
+# Frontier exploration (explore_lite, from mobile_base.repos). It sends Nav2
+# goals at the edge of the known map until nothing unexplored is reachable.
+explore_node:
+  ros__parameters:
+    robot_base_frame: base_footprint
+    costmap_topic: map
+    costmap_updates_topic: map_updates
+    visualize: true
+    planner_frequency: 0.3
+    # A frontier that makes no progress for this long is blacklisted, so a
+    # gap the robot cannot fit through does not hold exploration up.
+    progress_timeout: 30.0
+    potential_scale: 3.0
+    orientation_scale: 0.0
+    gain_scale: 1.0
+    transform_tolerance: 0.3
+    # Ignore slivers smaller than about two robot widths.
+    min_frontier_size: 0.5
+    return_to_init: true

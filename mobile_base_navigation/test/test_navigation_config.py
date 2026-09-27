@@ -466,12 +466,23 @@ def main():
     assert f"package='{ARBITER}'" in planning_launch
 
     # --- Chain topology, asserted by name so a reorder cannot pass silently.
-    # controller/behavior -> cmd_vel_nav -> smoother -> cmd_vel_smoothed ->
-    # collision monitor -> autonomy_cmd -> mux -> controller reference.
+    # controller/behavior -> [speed governor] -> cmd_vel_nav -> smoother ->
+    # cmd_vel_smoothed -> collision monitor -> autonomy_cmd -> mux ->
+    # controller reference.
     assert monitor['cmd_vel_in_topic'] == 'cmd_vel_smoothed'
     assert monitor['cmd_vel_out_topic'] == 'autonomy_cmd'
     assert mux['topics']['navigation']['topic'] == 'autonomy_cmd'
-    assert planning_launch.count("('cmd_vel', 'cmd_vel_nav')") == 3
+    # The smoother always reads cmd_vel_nav.
+    assert planning_launch.count("('cmd_vel', 'cmd_vel_nav')") == 1
+    # Controller and behaviours publish to nav_cmd_topic: cmd_vel_nav
+    # directly, or the governor's input when speed_governor:=true...
+    assert planning_launch.count(
+        "('cmd_vel', LaunchConfiguration('nav_cmd_topic'))") == 2
+    assert "'/cmd_vel_ungoverned' if '" in planning_launch
+    assert "' == 'true' else 'cmd_vel_nav'" in planning_launch
+    # ...and the governor closes the gap into cmd_vel_nav.
+    assert ("{'cmd_in': '/cmd_vel_ungoverned', 'cmd_out': '/cmd_vel_nav'}"
+            in planning_launch)
 
     # --- The e-stop lock outranks every command source, teleop included.
     lock = mux['locks']['estop']

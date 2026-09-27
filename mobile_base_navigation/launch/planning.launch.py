@@ -45,6 +45,11 @@ def generate_launch_description():
         'launch',
         'localization.launch.py',
     ])
+    mapping_launch = PathJoinSubstitution([
+        FindPackageShare('mobile_base_bringup'),
+        'launch',
+        'mapping.launch.py',
+    ])
     use_sim_time = {'use_sim_time': True}
     # nav2_util's TwistSubscriber and TwistPublisher share this one node-level
     # parameter, so each node is stamped on both sides or neither and every hop
@@ -53,9 +58,39 @@ def generate_launch_description():
     stamped_cmd_vel = {'enable_stamped_cmd_vel': True}
     bringup_share = FindPackageShare('mobile_base_bringup')
     return LaunchDescription([
+        # Where the robot's position comes from.
+        #
+        #   amcl (default) - a saved map, map_server and AMCL: known spaces.
+        #   slam - slam_toolbox mapping live, no saved map and no AMCL: unknown
+        #     spaces. The global planner may plan through unexplored cells and
+        #     replans as the map grows; the servers start at once, because
+        #     there is no initial pose to wait for.
+        DeclareLaunchArgument(
+            'localization', default_value='amcl', choices=['amcl', 'slam']),
+        SetLaunchConfiguration(
+            'slam_mode',
+            PythonExpression([
+                "'true' if '", LaunchConfiguration('localization'),
+                "' == 'slam' else 'false'",
+            ]),
+        ),
         DeclareLaunchArgument(
             'map',
-            description='Path to a saved Nav2 occupancy-map YAML file.',
+            default_value='',
+            description='Path to a saved Nav2 occupancy-map YAML file '
+                        '(localization:=amcl only).',
+        ),
+        # Put the ToF speed governor between the controller and the smoother,
+        # so every autonomous command is capped by what the ring sees along
+        # its direction of travel.
+        DeclareLaunchArgument('speed_governor', default_value='false'),
+        SetLaunchConfiguration(
+            'nav_cmd_topic',
+            PythonExpression([
+                "'/cmd_vel_ungoverned' if '",
+                LaunchConfiguration('speed_governor'),
+                "' == 'true' else 'cmd_vel_nav'",
+            ]),
         ),
         DeclareLaunchArgument('world', default_value='navigation_basic'),
         # Spawn pose, forwarded so a run can start the robot where it
@@ -117,6 +152,14 @@ def generate_launch_description():
             'planner_config',
             default_value=PathJoinSubstitution([
                 share, 'config', 'planner.yaml',
+            ]),
+        ),
+        # Loaded last on the planner in slam mode: lets it plan through
+        # unexplored space. In amcl mode the planner file is repeated instead.
+        DeclareLaunchArgument(
+            'planner_unknown_config',
+            default_value=PathJoinSubstitution([
+                share, 'config', 'planner_unknown.yaml',
             ]),
         ),
         DeclareLaunchArgument(
@@ -225,10 +268,35 @@ def generate_launch_description():
             LaunchConfiguration('controller_config'),
             condition=UnlessCondition(LaunchConfiguration('primitive_profile')),
         ),
+        SetLaunchConfiguration(
+            'planner_mode_config',
+            LaunchConfiguration('planner_unknown_config'),
+            condition=IfCondition(LaunchConfiguration('slam_mode')),
+        ),
+        SetLaunchConfiguration(
+            'planner_mode_config',
+            LaunchConfiguration('planner_config'),
+            condition=UnlessCondition(LaunchConfiguration('slam_mode')),
+        ),
         # Preserve the wrapper's value before the included stack receives
         # rviz=false. Include launch arguments share the launch context.
         SetLaunchConfiguration(
             'phase3_rviz', LaunchConfiguration('rviz')
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(mapping_launch),
+            launch_arguments={
+                'x': LaunchConfiguration('x'),
+                'y': LaunchConfiguration('y'),
+                'z': LaunchConfiguration('z'),
+                'yaw': LaunchConfiguration('yaw'),
+                'world': LaunchConfiguration('world'),
+                'gui': LaunchConfiguration('gui'),
+                'rviz': 'false',
+                'render_engine': LaunchConfiguration('render_engine'),
+                'velocity_smoother': 'false',
+            }.items(),
+            condition=IfCondition(LaunchConfiguration('slam_mode')),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(localization_launch),
@@ -248,6 +316,7 @@ def generate_launch_description():
                 # and break the single-arbiter rule.
                 'velocity_smoother': 'false',
             }.items(),
+            condition=UnlessCondition(LaunchConfiguration('slam_mode')),
         ),
         # map_server is owned by the included localization stack, so it is
         # neither started nor managed here.
@@ -261,6 +330,8 @@ def generate_launch_description():
                 # this swaps GridBased's plugin type to the lattice planner
                 # while leaving the whole global_costmap block above intact.
                 LaunchConfiguration('planner_profile_config'),
+                # Third: in slam mode, allow planning through unknown space.
+                LaunchConfiguration('planner_mode_config'),
                 use_sim_time,
             ],
             output='screen',
@@ -283,7 +354,7 @@ def generate_launch_description():
                 use_sim_time,
                 stamped_cmd_vel,
             ],
-            remappings=[('cmd_vel', 'cmd_vel_nav')],
+            remappings=[('cmd_vel', LaunchConfiguration('nav_cmd_topic'))],
             output='screen',
         ),
         Node(
@@ -295,7 +366,7 @@ def generate_launch_description():
                 use_sim_time,
                 stamped_cmd_vel,
             ],
-            remappings=[('cmd_vel', 'cmd_vel_nav')],
+            remappings=[('cmd_vel', LaunchConfiguration('nav_cmd_topic'))],
             output='screen',
         ),
         Node(
@@ -322,6 +393,22 @@ def generate_launch_description():
         # Husarion puts muxing last and has no collision monitor. This is the
         # merge, and the only order where "teleop overrides autonomy" and
         # "e-stop overrides everything" both hold.
+        # ToF speed governor: controller and behaviours -> governor ->
+        # smoother, so the smoother still ramps whatever the governor allows.
+        Node(
+            package='mobile_base_tools',
+            executable='speed_governor',
+            name='speed_governor',
+            parameters=[
+                PathJoinSubstitution([
+                    FindPackageShare('mobile_base_tools'), 'config',
+                    'bug_navigation.yaml']),
+                use_sim_time,
+                {'cmd_in': '/cmd_vel_ungoverned', 'cmd_out': '/cmd_vel_nav'},
+            ],
+            condition=IfCondition(LaunchConfiguration('speed_governor')),
+            output='screen',
+        ),
         Node(
             package='nav2_velocity_smoother',
             executable='velocity_smoother',
@@ -362,8 +449,12 @@ def generate_launch_description():
             executable='nav_autostart',
             name='nav_autostart',
             parameters=[use_sim_time],
-            condition=IfCondition(
-                LaunchConfiguration('autostart_on_localization')),
+            # AMCL only: in slam mode there is no pose to wait for.
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration('autostart_on_localization'),
+                "' == 'true' and '", LaunchConfiguration('slam_mode'),
+                "' == 'false'",
+            ])),
             output='screen',
         ),
         # The single arbiter. This is the only node that may publish to the
@@ -388,8 +479,10 @@ def generate_launch_description():
             name='lifecycle_manager_navigation',
             parameters=[{
                 'use_sim_time': True,
-                'autostart': ParameterValue(
-                    LaunchConfiguration('autostart'), value_type=bool),
+                'autostart': ParameterValue(PythonExpression([
+                    "'", LaunchConfiguration('autostart'), "' == 'true' or '",
+                    LaunchConfiguration('slam_mode'), "' == 'true'",
+                ]), value_type=bool),
                 'node_names': [
                     'controller_server',
                     'planner_server',

@@ -38,6 +38,7 @@ setup(
         'bug_trials = mobile_base_tools.bug_trials:main',
         'imu_bias = mobile_base_tools.imu_bias:main',
         'laser_odometry = mobile_base_tools.laser_odometry:main',
+        'nav_supervisor = mobile_base_tools.nav_supervisor:main',
         'tf_validator = mobile_base_tools.tf_validator:main',
         'stop_simulation = mobile_base_tools.stop_simulation:main',
     ]},

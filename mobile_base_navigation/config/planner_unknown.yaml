@@ -1,0 +1,8 @@
+# Overlay for localization:=slam. The map is being built as the robot drives,
+# so most of it is unknown at first; refusing unknown cells would leave the
+# planner nothing to plan through. It plans through them as if free and
+# replans as the LiDAR fills them in. Applies to either planner profile.
+planner_server:
+  ros__parameters:
+    GridBased:
+      allow_unknown: true
