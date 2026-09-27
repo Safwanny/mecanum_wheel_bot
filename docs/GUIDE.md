@@ -1102,8 +1102,7 @@ ring actually saw, which is a lower bound.
 | Obstacle, 25 mm up to the roof | 1.0 m |
 | Wall (a column of zones at one distance) | 2.0 m |
 
-Low-obstacle detection has not been proven yet; the bars in `proving_ground`
-(15-90 mm) are the test for it.
+Low-obstacle detection has not been proven yet.
 
 ### Switching sensors off
 

@@ -1170,9 +1170,6 @@ The result marked open floor as often as it marked edges, and a costmap treating
 those as lethal trapped the robot. Reinstating it needs dedicated downward
 sensors at near-normal incidence, not shallow rays from a 28.5 mm aperture.
 
-**The proving ground ramp.** With 9.5 mm of ground clearance the robot grounds
-on the lip at both ends, so it only ever demonstrated that it could get stuck.
-
 ### Limits worth stating
 
 - **Simulation flatters this badly.** Gazebo returns a perfect reflection from

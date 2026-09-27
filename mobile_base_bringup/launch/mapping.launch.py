@@ -39,9 +39,9 @@ def generate_launch_description():
     ])
     return LaunchDescription([
         DeclareLaunchArgument('world', default_value='navigation_basic'),
-        # Spawn pose, forwarded so a raised world such as
-        # proving_ground can put the robot on its deck rather than
-        # beside it. Without this the wrapper silently drops them.
+        # Spawn pose, forwarded so a run can start the robot where it
+        # needs to be - next to a wall, in a corridor - rather than
+        # at the origin. Without this the wrapper silently drops them.
         DeclareLaunchArgument('x', default_value='0.0'),
         DeclareLaunchArgument('y', default_value='0.0'),
         DeclareLaunchArgument('z', default_value='0.10'),

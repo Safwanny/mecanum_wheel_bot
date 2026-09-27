@@ -36,7 +36,7 @@ def matches(cmd):
 LEFTOVERS = (
     'gz sim -r -s /tmp/mobile_base_world_301119_ogre.sdf',
     '/usr/bin/python3 /opt/ros/jazzy/bin/ros2 launch mobile_base_bringup '
-    'simulation.launch.py world:=proving_ground',
+    'simulation.launch.py world:=my_world',
     '/opt/ros/jazzy/lib/robot_state_publisher/robot_state_publisher '
     '--ros-args --params-file /tmp/launch_params_88e3jxg7',
     '/opt/ros/jazzy/lib/robot_localization/ekf_node --ros-args '

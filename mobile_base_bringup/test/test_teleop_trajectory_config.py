@@ -74,7 +74,7 @@ def main():
     # The world set was reduced to these two. navigation_basic carries the
     # maintained Phase 2 map; my_world is the apartment layout.
     assert installed_worlds == {
-        'navigation_basic', 'my_world', 'proving_ground'}
+        'navigation_basic', 'my_world'}
 
     rviz = read(description / 'rviz' / 'mobile_base_sim.rviz')
     assert 'Fixed Frame: odom' in rviz
