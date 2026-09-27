@@ -35,6 +35,7 @@ setup(
         'sensor_panel = mobile_base_tools.sensor_panel:main',
         'speed_governor = mobile_base_tools.speed_governor:main',
         'bug_navigator = mobile_base_tools.bug_navigator:main',
+        'bug_trials = mobile_base_tools.bug_trials:main',
         'tf_validator = mobile_base_tools.tf_validator:main',
         'stop_simulation = mobile_base_tools.stop_simulation:main',
     ]},
