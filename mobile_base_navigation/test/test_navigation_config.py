@@ -102,20 +102,6 @@ def _xacro_properties(path):
     }
 
 
-def _uncommented(path):
-    """
-    Return only the live YAML of a file, with comment lines removed.
-
-    The overlay files explain in prose what they deliberately do NOT restate,
-    so a raw text scan for a leaked key would trip on the comment that exists
-    to justify its absence. Strip comments and scan the configuration itself.
-    """
-    return '\n'.join(
-        line for line in _read(path).splitlines()
-        if not line.lstrip().startswith('#')
-    )
-
-
 def _plugin_strings(path):
     return [
         line.split('plugin:', 1)[1].strip()
@@ -334,7 +320,10 @@ def main():
     assert controller['min_x_velocity_threshold'] <= 0.01
 
     follow_path = controller['FollowPath']
-    assert follow_path['plugin'] == 'nav2_mppi_controller::MPPIController'
+    assert follow_path['plugin'] == \
+        'nav2_rotation_shim_controller::RotationShimController'
+    assert follow_path['primary_controller'] == \
+        'nav2_mppi_controller::MPPIController'
     # Stock is "DiffDrive", which never samples lateral motion. The installed
     # library reports the valid options as DiffDrive, Omni and Ackermann.
     assert follow_path['motion_model'] == 'Omni'
@@ -544,184 +533,6 @@ def main():
         'nav2_velocity_smoother',
         'twist_mux',
     } <= dependencies
-
-    # --- The alternate motion profile: an eight-heading lattice planner and a
-    # controller that drives one primitive at a time. Both are OPT-IN. The
-    # assertions below are mostly about that word: the validated
-    # SmacPlanner2D + MPPI stack must remain what runs when nobody asks for
-    # anything, and the overlay must not quietly become a second copy of the
-    # configuration it overlays.
-
-    planner_overlay_yaml = navigation / 'config' / 'planner_lattice.yaml'
-    controller_overlay_yaml = navigation / 'config' / 'controller_primitive.yaml'
-    planner_overlay = _parameters(planner_overlay_yaml, 'planner_server')
-    controller_overlay = _parameters(controller_overlay_yaml, 'controller_server')
-
-    # The base configs still describe the holonomic stack: the profile is an
-    # overlay, so these files are what runs with motion_profile:=holonomic and
-    # they must never be edited into the alternate plugin.
-    assert planner['GridBased']['plugin'] == 'nav2_smac_planner::SmacPlanner2D'
-    assert follow_path['plugin'] == 'nav2_mppi_controller::MPPIController'
-    # The primitive profile is now the default, and holonomic stays reachable.
-    assert "default_value='primitive'" in planning_launch
-    assert "'holonomic'" in planning_launch
-    assert "choices=['primitive', 'holonomic']" in planning_launch
-
-    # The plugin ids stay GridBased and FollowPath. The behaviour tree runs a
-    # PlannerSelector defaulting to "GridBased" and a ControllerSelector
-    # defaulting to "FollowPath", so renaming the ids would need a matching
-    # edit there; swapping the type under a stable id is what makes the
-    # profile a drop-in for everything downstream.
-    assert set(planner_overlay) == {'GridBased'}
-    # The overlay may reach outside FollowPath for exactly one thing: the
-    # goal checker's yaw tolerance. controller.yaml keeps 0.50 rad because
-    # MPPI has no final-rotation phase and a tight value makes it re-approach
-    # forever; this controller has FINAL_ORIENT and rotates in place, and at
-    # 0.50 the checker declared success while it was still turning - measured
-    # final yaw errors of 21.7, 23.1 and 24.4 degrees, all just inside 28.6.
-    assert set(controller_overlay) == {'FollowPath', 'general_goal_checker'}
-    assert set(controller_overlay['general_goal_checker']) == {
-        'yaw_goal_tolerance'}
-    primitive_yaw = controller_overlay['general_goal_checker'][
-        'yaw_goal_tolerance']
-    assert primitive_yaw < goal_checker['yaw_goal_tolerance']
-    assert 'default_planner="GridBased"' in tree
-    assert 'default_controller="FollowPath"' in tree
-
-    lattice = planner_overlay['GridBased']
-    primitive = controller_overlay['FollowPath']
-    assert lattice['plugin'] == 'mobile_base_navigation::LatticePlanner'
-    assert primitive['plugin'] == 'mobile_base_navigation::PrimitiveController'
-    for plugin in _plugin_strings(planner_overlay_yaml) + _plugin_strings(
-            controller_overlay_yaml):
-        assert '::' in plugin
-        assert '/' not in plugin
-
-    # Overlays, not replacements. Restating the costmap, the goal checker or
-    # the threshold corrections in a second file is how the two profiles start
-    # to disagree about the robot they are driving.
-    overlay_text = (
-        _uncommented(planner_overlay_yaml) + _uncommented(controller_overlay_yaml))
-    for leaked in (
-        'global_costmap', 'local_costmap', 'robot_radius', 'inflation_layer',
-        'progress_checker', 'odom_topic',
-        'min_y_velocity_threshold', 'controller_plugins', 'planner_plugins',
-    ):
-        assert leaked not in overlay_text, leaked
-
-    # The lattice step must be a whole number of costmap cells. A diagonal
-    # edge of any other length lands between cell centres, and the lattice
-    # walks off its own grid after a few expansions.
-    step_cells = lattice['step_size_m'] / global_costmap['resolution']
-    assert abs(step_cells - round(step_cells)) < 1e-9
-    assert round(step_cells) >= 1
-
-    # A negative cost penalty would make an edge cheaper than its own length,
-    # which breaks the admissibility of the Euclidean heuristic and turns A*
-    # into "whatever was found first" without any error.
-    assert lattice['cost_penalty_weight'] >= 0.0
-    # Zero would make the search indifferent between one long diagonal and a
-    # staircase of the same length.
-    assert lattice['turning_cost_weight'] > 0.0
-    assert lattice['heading_snap_hysteresis_deg'] > 0.0
-    # The hysteresis band must stay well inside the 22.5 degree half-cell, or
-    # the snap would hold a heading that is no longer the nearest one.
-    assert lattice['heading_snap_hysteresis_deg'] < 22.5
-
-    # Unknown space stays impassable, matching the default GridBased block.
-    assert lattice['allow_unknown'] == planner['GridBased']['allow_unknown']
-    assert lattice['allow_unknown'] is False
-
-    # The lattice path ends at a CELL CENTRE and the controller stops there,
-    # so this tolerance is a floor under the final position error rather than
-    # just a search relaxation. It has to leave room under the goal checker.
-    assert lattice['tolerance'] < goal_checker['xy_goal_tolerance']
-
-    # Speeds were doubled by request and are outside anything characterised,
-    # so the only remaining bound is the velocity smoother's own ceiling. Pin
-    # that relationship rather than a number: a controller commanding past the
-    # smoother is asking for a limit that silently never arrives.
-    assert primitive['max_linear_vel'] <= VALIDATED_LINEAR * ENVELOPE_MULTIPLE
-    assert primitive['max_angular_vel'] <= VALIDATED_ANGULAR * ENVELOPE_MULTIPLE
-    assert primitive['max_linear_vel'] <= min(smoother_x, smoother_y)
-    assert primitive['max_angular_vel'] <= smoother_theta
-
-    # Orient-then-move is the requested behaviour and the reason the profile
-    # is the default: the robot turns to face each leg, so its heading always
-    # shows where it intends to go.
-    assert primitive['align_to_segment'] is True
-    # Degenerate replans near the goal must be filtered, or their rounding
-    # noise becomes a heading the robot turns to face once a second.
-    assert primitive['min_segment_length_m'] > 0.0
-    assert primitive['min_segment_length_m'] <= (
-        goal_checker['xy_goal_tolerance'])
-
-    # Floors below ceilings, or the controller could never reach a limit.
-    assert 0.0 < primitive['min_linear_vel'] < primitive['max_linear_vel']
-    assert 0.0 < primitive['min_angular_vel'] < primitive['max_angular_vel']
-
-    # The segment tolerance must exceed one control tick of travel, or the
-    # along-track error cannot be driven inside it before the next tick.
-    tick_travel = primitive['max_linear_vel'] / controller['controller_frequency']
-    assert primitive['segment_tolerance_m'] > tick_travel
-
-    # Equal align and realign thresholds chatter: EXECUTE leaves the moment
-    # the estimate crosses the line, ALIGN hands straight back, and the robot
-    # alternates between rotating and translating without progressing.
-    assert primitive['realign_yaw_rad'] > primitive['yaw_tolerance_rad']
-    # The controller must settle the final heading before the goal checker is
-    # asked whether it has settled.
-    # Against the OVERLAID tolerance, not controller.yaml's: the controller
-    # must settle before the checker is asked whether it has settled.
-    assert primitive['goal_yaw_tolerance_rad'] < primitive_yaw
-
-    # The min_*_velocity_threshold corrections belong to controller_server and
-    # filter MEASURED velocity, not commanded velocity. They are asserted
-    # above for the default profile and must stay at that value for both:
-    # the overlay must not reintroduce Nav2's diff-drive 0.5 by restating them.
-    assert 'min_x_velocity_threshold' not in primitive
-    assert 'min_y_velocity_threshold' not in primitive
-    assert 'min_theta_velocity_threshold' not in primitive
-
-    # Both profiles feed the same downstream chain. The overlay may not remap
-    # anything, name the driver-facing topic, or touch the arbitration and
-    # safety configs - which is what "transparent drop-in" has to mean.
-    for forbidden in (COMMAND_TOPIC, 'cmd_vel', 'twist_mux', 'collision_monitor'):
-        assert forbidden not in overlay_text, forbidden
-
-    # Launch wiring. The overlay is loaded SECOND, after the default config,
-    # because later parameter files win leaf by leaf; first would be inert.
-    assert "'planner_profile_config'" in planning_launch
-    assert "'controller_profile_config'" in planning_launch
-    assert planning_launch.index(
-        "LaunchConfiguration('planner_config'),\n") < planning_launch.index(
-        "LaunchConfiguration('planner_profile_config'),")
-    assert planning_launch.index(
-        "LaunchConfiguration('controller_config'),\n") < planning_launch.index(
-        "LaunchConfiguration('controller_profile_config'),")
-    # The harness carries the planner half of the profile only: the
-    # controller needs a robot, and the harness has none.
-    assert "'motion_profile'" in harness_launch
-    assert 'planner_lattice.yaml' in harness_launch
-    assert 'controller_primitive.yaml' not in harness_launch
-
-    # pluginlib registration, the same shape nav2_smac_planner uses.
-    plugins_xml = ET.parse(navigation / 'plugins.xml').getroot()
-    assert plugins_xml.get('path') == 'mobile_base_navigation_plugins'
-    exported = {
-        (element.get('type'), element.get('base_class_type'))
-        for element in plugins_xml.findall('class')
-    }
-    assert exported == {
-        ('mobile_base_navigation::LatticePlanner', 'nav2_core::GlobalPlanner'),
-        ('mobile_base_navigation::PrimitiveController', 'nav2_core::Controller'),
-    }
-    package_text = _read(navigation / 'package.xml')
-    assert '<nav2_core plugin="${prefix}/plugins.xml" />' in package_text
-    build_dependencies = {
-        element.text for element in package.findall('depend')}
-    assert {'nav2_core', 'nav2_costmap_2d', 'pluginlib', 'rclcpp'} <= (
-        build_dependencies)
 
     navigation_rviz = _read(navigation / 'rviz' / 'navigation.rviz')
     assert 'Fixed Frame: map' in navigation_rviz

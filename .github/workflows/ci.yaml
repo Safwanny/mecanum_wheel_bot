@@ -47,7 +47,7 @@ jobs:
             mobile_base_tools mobile_base_bringup \
             mobile_base_navigation \
             --ctest-args -E \
-            'test_test_sensor_topics.py|test_test_lattice_plan_preview.py'
+            'test_test_sensor_topics.py'
           colcon test-result --verbose
 
       - name: Validate bringup configuration without Gazebo runtime

@@ -43,7 +43,6 @@ def generate_launch_description():
     arguments = [
         ('world', 'navigation_basic'), ('x', '0.0'), ('y', '0.0'),
         ('yaw', '0.0'), ('gui', 'false'), ('rviz', 'true'),
-        ('motion_profile', 'holonomic'),
         ('explore', 'false'),
         # Consumed by the included simulation launch through the shared
         # launch context.
@@ -65,7 +64,6 @@ def generate_launch_description():
                 'yaw': LaunchConfiguration('yaw'),
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
-                'motion_profile': LaunchConfiguration('motion_profile'),
                 # The live SLAM map first, costmaps faint or off.
                 'rviz_config': PathJoinSubstitution(
                     [share, 'rviz', 'explore.rviz']),

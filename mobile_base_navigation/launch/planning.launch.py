@@ -119,35 +119,6 @@ def generate_launch_description():
         DeclareLaunchArgument('autostart', default_value='false'),
         DeclareLaunchArgument(
             'autostart_on_localization', default_value='true'),
-        # Which planner/controller pair to load.
-        #
-        #   primitive (default) - LatticePlanner + PrimitiveController. Paths
-        #     become eight-heading polylines, and the robot turns to face each
-        #     leg before driving it, one motion at a time: rotate, then a
-        #     straight or diagonal run, never both at once.
-        #
-        #   holonomic - SmacPlanner2D + MPPI, the Phase 3 stack that every
-        #     measurement in docs/ and the README was taken against. MPPI
-        #     blends translation and rotation freely, which is what a mecanum
-        #     base is for, but the motion is harder to read.
-        #
-        # The profile only adds an overlay parameter file on top of the
-        # default configs, so the goal checker, progress checker, odom_topic,
-        # costmaps and the whole command chain below controller_server are
-        # identical either way.
-        DeclareLaunchArgument(
-            'motion_profile',
-            default_value='primitive',
-            choices=['primitive', 'holonomic'],
-        ),
-        SetLaunchConfiguration(
-            'primitive_profile',
-            PythonExpression([
-                "'true' if '",
-                LaunchConfiguration('motion_profile'),
-                "' == 'primitive' else 'false'",
-            ]),
-        ),
         DeclareLaunchArgument(
             'planner_config',
             default_value=PathJoinSubstitution([
@@ -166,22 +137,6 @@ def generate_launch_description():
             'local_costmap_config',
             default_value=PathJoinSubstitution([
                 share, 'config', 'local_costmap.yaml',
-            ]),
-        ),
-        # Overlays, appended after the default configs when the primitive
-        # profile is selected. They name only the leaves that change, so the
-        # costmap, goal checker and threshold corrections live in exactly one
-        # file and the two profiles cannot drift apart.
-        DeclareLaunchArgument(
-            'planner_overlay_config',
-            default_value=PathJoinSubstitution([
-                share, 'config', 'planner_lattice.yaml',
-            ]),
-        ),
-        DeclareLaunchArgument(
-            'controller_overlay_config',
-            default_value=PathJoinSubstitution([
-                share, 'config', 'controller_primitive.yaml',
             ]),
         ),
         DeclareLaunchArgument(
@@ -243,31 +198,6 @@ def generate_launch_description():
                 share, 'rviz', 'navigation.rviz',
             ]),
         ),
-        # Resolve each server's second parameter file. Under the holonomic
-        # profile it resolves to the default config, so the file is simply
-        # loaded twice and nothing changes; under primitive it resolves to the
-        # overlay. This keeps ONE Node action per server: duplicating them
-        # behind IfCondition/UnlessCondition is how two copies start to drift.
-        SetLaunchConfiguration(
-            'planner_profile_config',
-            LaunchConfiguration('planner_overlay_config'),
-            condition=IfCondition(LaunchConfiguration('primitive_profile')),
-        ),
-        SetLaunchConfiguration(
-            'planner_profile_config',
-            LaunchConfiguration('planner_config'),
-            condition=UnlessCondition(LaunchConfiguration('primitive_profile')),
-        ),
-        SetLaunchConfiguration(
-            'controller_profile_config',
-            LaunchConfiguration('controller_overlay_config'),
-            condition=IfCondition(LaunchConfiguration('primitive_profile')),
-        ),
-        SetLaunchConfiguration(
-            'controller_profile_config',
-            LaunchConfiguration('controller_config'),
-            condition=UnlessCondition(LaunchConfiguration('primitive_profile')),
-        ),
         SetLaunchConfiguration(
             'planner_mode_config',
             LaunchConfiguration('planner_unknown_config'),
@@ -326,11 +256,7 @@ def generate_launch_description():
             name='planner_server',
             parameters=[
                 LaunchConfiguration('planner_config'),
-                # Second, so its leaves win. Under motion_profile:=primitive
-                # this swaps GridBased's plugin type to the lattice planner
-                # while leaving the whole global_costmap block above intact.
-                LaunchConfiguration('planner_profile_config'),
-                # Third: in slam mode, allow planning through unknown space.
+                # Second: in slam mode, allow planning through unknown space.
                 LaunchConfiguration('planner_mode_config'),
                 use_sim_time,
             ],
@@ -345,11 +271,6 @@ def generate_launch_description():
             name='controller_server',
             parameters=[
                 LaunchConfiguration('controller_config'),
-                # Second, so its leaves win. Under motion_profile:=primitive
-                # this swaps FollowPath's plugin type to the single-primitive
-                # controller; the goal checker, progress checker, odom_topic
-                # and the min_*_velocity_threshold corrections are untouched.
-                LaunchConfiguration('controller_profile_config'),
                 LaunchConfiguration('local_costmap_config'),
                 use_sim_time,
                 stamped_cmd_vel,
