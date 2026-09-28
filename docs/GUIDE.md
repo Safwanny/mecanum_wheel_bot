@@ -274,21 +274,21 @@ ros2 service call /lifecycle_manager_navigation/manage_nodes nav2_msgs/srv/Manag
 
 **2. Clear the emergency stop.** It is engaged at startup on purpose, so a
 human decides when the scene is ready. The robot will not move until you do
-this:
+this. Click **▶ START ROBOT** on the control panel (it turns into a red
+**■ STOP ROBOT**, which engages the e-stop again), or from a terminal:
 
 ```bash
 ros2 service call /estop_gate/reset std_srvs/srv/Trigger
 ```
 
-**3. Give it a goal.** Click **2D Goal Pose** in RViz. On the default
-`primitive` profile the robot **turns to face the first leg, then drives it**,
-repeating that per leg and settling the goal heading at the end — so expect
-visible stop-turn-go rather than a smooth curve. Click again for the next goal,
-as often as you like — the pose it reaches is simply where the next goal starts
-from.
+**3. Give it a goal.** Click **2D Goal Pose** in RViz. If the path points more
+than 45 deg away from where the robot faces, it **turns in place to face the
+path first**, then drives holonomically with the camera forward, turning into
+corners as it goes. Click again for the next goal, as often as you like — the
+pose it reaches is simply where the next goal starts from.
 
 Drag the goal arrow to set the final heading; the robot rotates onto it after
-arriving. To watch which primitive is running:
+arriving. To watch the commands:
 
 ```bash
 ros2 topic echo /cmd_vel_nav --field twist
@@ -875,25 +875,15 @@ The harness needs no Gazebo and is a candidate for CI once planning regressions
 are worth asserting.
 
 **Speeds are no longer the ones these numbers were measured at.** Both profiles
-were doubled by request: `primitive` runs 0.20 m/s / 0.60 rad/s and `holonomic`
-0.30 m/s / 1.20 rad/s, against a characterised envelope of 0.10 m/s /
+were doubled by request: the controller runs 0.30 m/s forward, 0.15 m/s
+sideways and 0.08 m/s in reverse, turning at up to 1.20 rad/s, against a characterised envelope of 0.10 m/s /
 0.30 rad/s. The stopping distances below (0.065 m on the e-stop service,
 0.120 m on the deadman) were taken at 0.12 m/s and scale roughly with speed, so
 treat them as a lower bound now. The velocity smoother's `[0.5, 0.5, 2.0]`
-ceiling is the only remaining hard bound; the static tests assert both
-controllers stay under it. Recovery rotation was doubled too, which is the
+ceiling is the only remaining hard bound; the static tests assert the
+controller stays under it. Recovery rotation was doubled too, which is the
 least comfortable part — recoveries run close to obstacles, and a spin that
 misjudges clearance now does so twice as fast.
-
-On the `primitive` profile the goal-error picture differs: the lattice ends its
-path at a cell centre within its own `tolerance` of 0.05 m, but the goal checker
-still terminates the run at 0.15 m, so measured error clusters near 0.15 m
-rather than near 0.05 m. That is a property of the checker, not of the planner.
-
-The `primitive` profile has no accuracy campaign, no stopping-distance
-measurement of its own, and no hardware exposure. It is the default because its
-motion is legible, not because it is better characterised — `holonomic` remains
-the profile every number in this README was measured against.
 
 ---
 
@@ -1493,9 +1483,13 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped "{header: {frame_
 | --- | --- |
 | Map RViz | Path appears; walls fill in; the path re-plans as they do |
 | Sim RViz | Rays and shapes react to walls and doorways |
-| Panel | Speed, level and its cause, navigator mode, distance to goal, pose uncertainty |
+| Map RViz, localisation | Green: Gazebo ground truth. Purple: the SLAM-corrected pose navigation uses. Cyan: the EKF in `odom`. Dots: each SLAM correction (amber a scan-match nudge, red a jump over 15 cm, likely a loop closure). Circle: SLAM position uncertainty |
+| Panel | Speed, level and its cause, navigator mode, distance to goal, Map σ (SLAM), true error against ground truth, last SLAM fix |
 
-Panel **STOP / RELEASE** freezes and resumes autonomous driving. If the mode
+Panel **■ STOP ROBOT / ▶ START ROBOT** engages and releases the e-stop gate,
+which holds every command source, teleop included. `localization_monitor`
+publishes the numbers as JSON on `/localization/status`; the truth is on
+`/ground_truth/odom` (simulation only, never on TF). If the mode
 turns to **bug fallback**, Nav2 found no way and DistBug is working round the
 blockage; it hands back once past it.
 

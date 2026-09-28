@@ -179,8 +179,8 @@ Costmap sizing is derived from the robot rather than copied:
 
 | Parameter | Value | Derivation |
 | --- | --- | --- |
-| `robot_radius` | 0.16 | Circumscribed radius is the end-cap corner, `sqrt(0.130² + 0.0838²) = 0.1547` from `properties.xacro`, rounded up |
-| `inflation_radius` | 0.30 | Exceeds the footprint for a usable gradient, and leaves a zero-cost band in the 0.925 m gap at the interior wall's north end |
+| `robot_radius` | 0.155 | Circumscribed radius is the end-cap corner, `sqrt(0.130² + 0.0838²) = 0.1547` from `properties.xacro`: the smallest circle safe at every heading. `footprint_padding` 0.01 on top |
+| `inflation_radius` | 0.22 | Just past the padded footprint (0.165) for a gradient, with `cost_scaling_factor` 8 so cost falls off within centimetres; leaves a 0.485 m zero-cost band in the 0.925 m gap |
 | `resolution` | 0.05 | Matches the saved map exactly; a mismatch causes resampling artifacts |
 | `obstacle_max_range` | 3.5 | Inside the 4.0 m LiDAR maximum, so max-range returns never mark obstacles |
 
@@ -367,9 +367,9 @@ emergency stop.
 | **5** | ToF-only navigation: holonomic DistBug with adaptive standoff, deadlock guards, direction-aware speed levels, a control panel with safety and localisation readouts |
 | **6** | Unknown environments: live SLAM (no saved map), laser odometry and gyro-bias correction in the EKF, Nav2 planning through unexplored space, ToF speed governor, DistBug fallback, frontier exploration |
 
-Two motion profiles are available: `primitive` turns to face each leg before
-driving it, and `holonomic` blends translation and rotation freely. Details in
-[ARCHITECTURE.md](ARCHITECTURE.md#motion-profiles).
+The robot turns in place to face its path, then drives holonomically with
+the camera forward. Details in
+[ARCHITECTURE.md](ARCHITECTURE.md#heading-turn-to-face-then-drive-holonomically).
 
 ### Verified in simulation only
 

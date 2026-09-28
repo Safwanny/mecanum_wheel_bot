@@ -163,7 +163,7 @@ whole envelope, by contrast, would reach the wheel outer faces along the entire
 body length and swallow the wheels.
 
 The collision boxes' circumscribed radius is the square cap corner at
-0.1547 m, so Nav2's `robot_radius` is 0.16 m in `planner.yaml` and `local_costmap.yaml`. Raising
+0.1547 m, so Nav2's `robot_radius` is 0.155 m (plus 0.01 padding) in `planner.yaml` and `local_costmap.yaml`. Raising
 `chassis_length` pushes that corner further out and those two values must move
 with it.
 
@@ -423,228 +423,26 @@ activation races AMCL, which cannot publish `map -> odom` until an initial pose
 is set; with `autostart:=false` the nodes are brought up by hand through
 `/lifecycle_manager_navigation/manage_nodes` once the pose is set.
 
-## Motion profiles
+## Heading: turn to face, then drive holonomically
 
-Two planner/controller pairs ship, selected by one launch argument.
+The controller is Nav2's `RotationShimController` wrapped around MPPI
+(`controller.yaml`, `FollowPath`). When the path direction is more than 45 deg
+from the robot's heading, the shim turns the robot in place to face it, and
+hands over to MPPI once within about 6 deg. MPPI then drives with the Omni
+model - curves, small sidesteps, turning while moving - kept camera-forward by
+`PathAngleCritic` (forward preference, engaging beyond 0.1 rad) and a reverse
+limit of 0.08 m/s, so turning round is always cheaper than backing up. At the
+goal the shim squares up to the goal heading in place.
 
-```bash
-# primitive (default) - turn to face each leg, then drive it
-ros2 launch mobile_base_navigation planning.launch.py map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
+Measured in simulation on a 3 m goal in `my_world`, against Gazebo ground
+truth (angle between heading and direction of travel): median 3.4 deg, 90 %
+within 13 deg. Plain MPPI drove the same goal behind it entirely in reverse
+(median 171 deg).
 
-# holonomic - MPPI, blended motion, the profile every measurement was taken against
-ros2 launch mobile_base_navigation planning.launch.py motion_profile:=holonomic map:="$HOME/ros2_ws/src/mobile_base/maps/navigation_basic.yaml"
-```
-
-Everything earlier in this document describes the **holonomic** pair, which is
-still the only one with measured accuracy behind it. The **primitive** pair is
-now the default because its motion is legible: the robot faces where it is
-about to go, so its heading tells you its intent.
-
-`motion_profile` selects a pair, not a stack. Both profiles use the same
-costmaps, the same goal and progress checkers, the same `odom_topic`, the same
-behaviour tree and the same command chain below `controller_server`:
-
-```text
-motion_profile:=holonomic                  motion_profile:=primitive (default)
-        |                                          |
-        v                                          v
-  planner.yaml                              planner.yaml
-                                          + planner_lattice.yaml   (overlay)
-        |                                          |
-        v                                          v
-  GridBased =                               GridBased =
-  nav2_smac_planner::SmacPlanner2D          mobile_base_navigation::LatticePlanner
-        |                                          |
-  controller.yaml                           controller.yaml
-                                          + controller_primitive.yaml (overlay)
-        |                                          |
-        v                                          v
-  FollowPath =                              FollowPath =
-  nav2_mppi_controller::MPPIController      mobile_base_navigation::PrimitiveController
-        |                                          |
-        +--------------------+---------------------+
-                             |
-                             v
-                       /cmd_vel_nav  --> velocity_smoother --> collision_monitor
-                                     --> twist_mux --> /mobile_base_controller/reference
-```
-
-The overlays are **parameter files loaded second**, naming only the leaves that
-change; later files win leaf by leaf. That is why the costmap block, the goal
-checker and the `min_*_velocity_threshold` corrections exist in exactly one
-place and cannot drift between profiles. It is also why the plugin **ids** stay
-`GridBased` and `FollowPath` even though the profile is named after them: the
-behaviour tree runs a `PlannerSelector` defaulting to `GridBased` and a
-`ControllerSelector` defaulting to `FollowPath`, so swapping the plugin *type*
-under a stable id is what makes the alternate profile a drop-in.
-
-### `mobile_base_navigation::LatticePlanner`
-
-A* over `(x, y, heading)`, where heading is one of eight directions 45 degrees
-apart. Two edge types:
-
-- **TRANSLATE** — one step along the current heading. A diagonal is its own
-  edge type with length `step * sqrt(2)`, not a forward edge composed with a
-  strafe, because the robot executes it as a single primitive and the search
-  has to cost it as one.
-- **ROTATE** — plus or minus one heading, cost `turning_cost_weight` times the
-  angular distance. Restricting rotation to adjacent headings keeps the
-  branching factor at three; because the cost is linear in angle, composing two
-  45-degree edges costs exactly what one 90-degree edge would.
-
-`step_size_m` is quantised to a whole number of costmap cells. This is not
-tidiness: a diagonal edge of an arbitrary length lands between cell centres and
-the lattice walks off its own grid after a few expansions.
-
-Edge validity is the robot's disc swept along the segment, computed as a
-**dilation of the lethal set done once per search** rather than a disc test per
-candidate edge — the naive form is tens of millions of lookups on a room-sized
-map. Only `LETHAL_OBSTACLE` is dilated, never `INSCRIBED_INFLATED_OBSTACLE`:
-the inflation layer has already marked the inscribed band using the same
-`robot_radius`, so dilating that too would apply the footprint twice and close
-gaps the robot fits through. `allow_unknown: false` is preserved, so unknown
-space is as impassable as a wall.
-
-The radius comes from `getCircumscribedRadius()` rather than being restated.
-Worth knowing, because it does not read back as the 0.14 in `planner.yaml`:
-Nav2 builds a 16-gon from `robot_radius` then pads it by `footprint_padding`
-(0.01) per coordinate, so a 45-degree vertex moves from `(0.099, 0.099)` to
-`(0.109, 0.109)` and the logged radius is **0.154 m**. That is the padded
-footprint the rest of Nav2 collision-checks with, so matching it keeps the
-planner and the costmap agreeing.
-
-Consecutive same-heading edges are merged before the path is returned. A 3 m
-straight run at a 0.05 m step is 60 edges and comes back as **two poses**.
-Every pose orientation carries the **travel direction** of the segment leaving
-it — not a commanded body yaw — except the last, which carries the requested
-goal yaw for the goal checker to compare against.
-
-A measured example, planning from the map origin to `(2.5, 3.4)` in
-`navigation_basic`:
-
-| # | Position | Segment leaving it |
-| --- | --- | --- |
-| 0 | (0.005, −0.004) | 45.000 deg, 1.344 m |
-| 1 | (0.955, 0.946) | 90.000 deg, 2.100 m |
-| 2 | (0.955, 3.046) | 45.000 deg, 0.495 m |
-| 3 | (1.305, 3.396) | 0.000 deg, 1.150 m |
-| 4 | (2.455, 3.396) | — |
-
-Four segments, every one an exact multiple of 45 degrees, threading the 0.925 m
-gap at the interior wall's north end.
-
-### `mobile_base_navigation::PrimitiveController`
-
-A state machine, not an optimiser:
-
-```text
-ALIGN_TO_SEGMENT_HEADING --> EXECUTE_SEGMENT --> (next segment) ... --> FINAL_ORIENT
-         ^                        |
-         +---- yaw drift ---------+
-```
-
-`ALIGN` and `FINAL_ORIENT` command angular velocity only. `EXECUTE_SEGMENT`
-commands linear velocity only, always along one of the eight **body-frame**
-directions, so a diagonal has `|vx| == |vy|` exactly and nothing in between is
-reachable.
-
-`align_to_segment` (default **true**) decides what `ALIGN` aims at, and it is
-the single most visible setting in the profile:
-
-- **`true` — orient, then move.** `ALIGN` drives the body yaw onto the
-  segment's own direction, so every `EXECUTE_SEGMENT` is a pure `FORWARD`
-  along the way the robot is pointing. The lattice's diagonals are still used;
-  the robot turns to face along them and drives forward. This is the default
-  because the heading always shows intent.
-- **`false` — crab.** `ALIGN` snaps to the *nearest* of the eight headings, at
-  most 22.5 degrees, once. Because the plan's segment directions are themselves
-  45-degree-snapped, every segment is then exactly a body-frame primitive and
-  the base strafes or moves diagonally **without turning at all**. Far fewer
-  rotations, and the reason a holonomic base exists — but the robot crabs
-  sideways and its heading tells you nothing.
-
-Regulation is a PID on heading error and a separate PID on **along-track**
-distance, with both integrators and both derivative histories reset on every
-phase transition. Two traps are worth naming:
-
-- Along-track distance, not straight-line distance to the waypoint.
-  Straight-line distance never goes negative, so a robot that overshoots would
-  be driven back and forth across the waypoint forever. The projection goes
-  negative and ends the segment.
-- An integrator carried across a phase change is winding up against an error it
-  was never regulating. The align integral would dump itself into the first
-  translation tick — precisely the blended command this profile exists to make
-  impossible.
-
-`realign_yaw_rad` (0.15) is deliberately wider than `yaw_tolerance_rad` (0.05).
-Equal values chatter: `EXECUTE` leaves the moment the estimate crosses the
-line, `ALIGN` hands straight back, and the robot alternates between rotating
-and translating without progressing.
-
-The plan is planned in `map` and executed against a pose in the local costmap's
-`odom` frame, so it is re-transformed **every tick** — `map -> odom` moves
-whenever AMCL corrects. Only the geometry is refreshed; the phase and segment
-index persist, or the machine would restart 20 times a second and never leave
-the first segment. The body-frame direction is snapped afterwards, which
-absorbs up to 22.5 degrees of `map -> odom` rotation before a segment could be
-misclassified.
-
-Default limits are **0.20 m/s and 0.60 rad/s**, doubled from the validated
-0.10 / 0.30 by request. Both profiles were doubled; MPPI now runs 0.30 / 0.30 /
-1.20. Nothing about that is characterised, and the measured stop distances
-recorded earlier in this document were taken at 0.12 m/s and no longer describe
-the current configuration. The velocity smoother's `[0.5, 0.5, 2.0]` ceiling is
-the only remaining bound, and the static tests assert both controllers stay
-under it rather than asserting a number.
-
-### The degenerate-replan bug, and why `min_segment_length_m` exists
-
-`bt_navigator` replans at 1 Hz. A replan issued while the robot is already
-sitting on its goal returns a path a few millimetres long, whose direction is
-rounding noise rather than intent. Under `align_to_segment`, the robot turned
-to face that noise, settled, and was handed a fresh one a second later — which
-looked exactly like random spinning at the moment it should have been settling
-the goal heading. `min_segment_length_m` (0.05) drops sub-threshold waypoints
-when a plan loads, so such a plan has **no segments at all** and the machine
-goes straight to `FINAL_ORIENT` instead of fighting it.
-
-### What is verified, and what is not
-
-Measured in simulation across three goals with a commanded final heading,
-sampling `/cmd_vel_nav`, at the doubled speeds and with orient-then-move:
-
-| | Result |
-| --- | --- |
-| Goals reached | 3 / 3 |
-| Blended commands | **0** |
-| Final position error | 0.024 - 0.096 m |
-| Final heading error | **4.9 / 5.3 / 4.8 deg** |
-| Peak commanded speed | 0.200 m/s |
-
-Heading error was **21.7 / 23.1 / 24.4 deg** before one fix, and that spread is
-the signature of a tolerance cap rather than a control problem: all three sit
-just inside 28.6 deg, which is the `yaw_goal_tolerance: 0.50` inherited from
-the MPPI config. `controller_server` stops calling a controller the moment its
-goal checker is satisfied, so `FINAL_ORIENT` was being cut off mid-rotation
-every time. The checker, not the controller, was the limit. The overlay
-tightens it to 0.10 rad for this profile only; `controller.yaml` keeps 0.50 for
-MPPI, which has no final-rotation phase and re-approaches forever if the
-tolerance is tight.
-
-Position error sits well inside `xy_goal_tolerance` here, because orienting
-before moving means the robot arrives along the segment rather than being
-carried past it by a blended approach.
-
-What is **not** established: this profile has no accuracy campaign behind it,
-no stopping-distance measurement of its own, and no hardware exposure. It is
-the default because its motion is legible, not because it is better
-characterised - `holonomic` remains the profile every other number in this
-document was measured against, and the doubled speeds put both profiles outside
-what was characterised at all. One further caveat, since it is easy to
-misread a wheel-side trace: the velocity smoother still ramps *across* a phase
-transition, so a twist sampled at `/mobile_base_controller/reference` during a
-switch can briefly carry both terms even though the controller never commanded
-both. The invariant this profile guarantees is on the controller's own output.
+An eight-heading lattice planner with a one-motion-at-a-time controller
+(`motion_profile:=primitive`) existed until 2026-09-28. It faced forward
+(median 0.7 deg) but stopped at every corner, never strafed and was capped at
+0.2 m/s, and was removed; it is in git history before that date.
 
 ## Deferred navigation startup
 
