@@ -31,7 +31,13 @@ global_costmap:
       # full-width bumper cap; a circular footprint suits a holonomic base
       # with no preferred heading. Raising chassis_length pushes that corner
       # further out, so this value moves with it.
-      robot_radius: 0.16
+      # The tightest circle that holds the body at every heading: the
+      # circumscribed radius is 0.1547 m (end-cap corner at the wheels' outer
+      # faces). Any smaller and some heading puts a corner in the wall.
+      robot_radius: 0.155
+      # Stated, not left to the 0.01 default: this is the margin for
+      # localisation and control error, and it sits on top of the radius.
+      footprint_padding: 0.01
       # Matches the saved map resolution exactly.
       resolution: 0.05
       track_unknown_space: true
@@ -69,43 +75,14 @@ global_costmap:
 
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        # Exceeds robot_radius for a usable gradient, and keeps a zero-cost
-        # band in the 0.925 m north gap: 0.925 - 2 * 0.30 = 0.325 m.
-        # Measured: with 0.30 the gap centre reads cost 0; with 0.55 it reads
-        # 39-61. Inflation is not lethal, so a global plan still fits through
-        # either way - the band is what keeps the short route cheap, which is
-        # what matters once a controller exists. Only robot_radius can close
-        # the gap outright, by making it inscribed cost end to end.
-        inflation_radius: 0.30
+        # Cut to the minimum that still gives the controller a gradient:
+        # 0.22 is 5.5 cm past the padded radius (0.165), where 0.30 was 13.5.
+        # Inflation is soft cost, never lethal - it only decides how much the
+        # plan pays to pass close - so shrinking it opens narrow passages
+        # without letting the body closer than robot_radius + padding. The
+        # steep factor keeps cost high right at the edge and near zero a few
+        # centimetres out, so a doorway's centre line is cheap.
+        # 0.925 m north gap: 0.925 - 2 * 0.22 = 0.485 m band of zero cost.
+        inflation_radius: 0.22
         # Shapes the gradient only; it does not resize the cleared region.
-        cost_scaling_factor: 3.0
-
-# ---------------------------------------------------------------------------
-# GridBasedLattice - alternate planner profile, opt-in, NOT loaded by default.
-#
-# Kept commented here as a signpost rather than as live configuration. The
-# real block lives in config/planner_lattice.yaml, which planning.launch.py
-# loads as an OVERLAY on top of this file when motion_profile:=primitive, so
-# the global_costmap block above is never duplicated and the two copies can
-# never drift apart. Uncommenting this would not enable anything; it would
-# just be a second stale copy.
-#
-#   ros2 launch mobile_base_navigation planning.launch.py \
-#     motion_profile:=primitive map:=...
-#
-# What it changes: SmacPlanner2D's grid A* is replaced by an eight-heading
-# motion lattice whose every edge is one primitive this robot can execute -
-# a straight or 45-degree diagonal run, or a heading change. Paths become
-# polylines with sharp corners instead of smooth grid routes.
-#
-#   planner_server:
-#     ros__parameters:
-#       GridBased:
-#         plugin: mobile_base_navigation::LatticePlanner
-#         step_size_m: 0.05
-#         turning_cost_weight: 0.35
-#         heading_snap_hysteresis_deg: 5.0
-#
-# The id stays GridBased on purpose: the behaviour tree's PlannerSelector
-# defaults to that name, so swapping the type under a stable id is what makes
-# the alternate profile a drop-in.
+        cost_scaling_factor: 8.0

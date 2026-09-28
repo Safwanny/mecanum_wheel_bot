@@ -17,7 +17,13 @@ local_costmap:
       height: 3
       resolution: 0.05
       # Must match the global costmap; see planner.yaml for the derivation.
-      robot_radius: 0.16
+      # The tightest circle that holds the body at every heading: the
+      # circumscribed radius is 0.1547 m (end-cap corner at the wheels' outer
+      # faces). Any smaller and some heading puts a corner in the wall.
+      robot_radius: 0.155
+      # Stated, not left to the 0.01 default: this is the margin for
+      # localisation and control error, and it sits on top of the radius.
+      footprint_padding: 0.01
       always_send_full_costmap: true
       plugins: ["obstacle_layer", "inflation_layer"]
 
@@ -63,5 +69,5 @@ local_costmap:
       inflation_layer:
         # Same values as the global costmap so tuning transfers.
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.30
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.22
+        cost_scaling_factor: 8.0
