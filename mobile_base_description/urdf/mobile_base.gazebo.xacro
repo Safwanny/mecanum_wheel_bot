@@ -6,6 +6,17 @@
               name="gz_ros2_control::GazeboSimROS2ControlPlugin">
         <parameters>${controllers_file}</parameters>
       </plugin>
+      <!-- Ground truth for measuring localisation, topic only, never TF:
+           tf_validator treats a ground-truth frame as contamination. -->
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_topic>/ground_truth/odom</odom_topic>
+        <odom_frame>world</odom_frame>
+        <robot_base_frame>base_footprint</robot_base_frame>
+        <odom_publish_frequency>50</odom_publish_frequency>
+        <tf_topic>/ground_truth/tf_unused</tf_topic>
+        <dimensions>2</dimensions>
+      </plugin>
     </gazebo>
   </xacro:macro>
 </robot>

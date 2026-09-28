@@ -27,6 +27,7 @@ setup(
     entry_points={'console_scripts': [
         'mecanum_motion_test = mobile_base_tools.mecanum_motion_test:main',
         'odom_to_path = mobile_base_tools.odom_to_path:main',
+        'localization_monitor = mobile_base_tools.localization_monitor:main',
         'timestamp_validator = mobile_base_tools.timestamp_validator:main',
         'tof_ray_markers = mobile_base_tools.tof_ray_markers:main',
         'tof_floor_classifier = mobile_base_tools.tof_floor_classifier:main',

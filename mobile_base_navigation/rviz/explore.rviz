@@ -212,6 +212,93 @@ Visualization Manager:
       Reliability Policy: Reliable
       Value: /explore/frontiers
     Value: true
+  - Class: rviz_default_plugins/Path
+    Color: 80; 220; 120
+    Enabled: true
+    Line Style: Lines
+    Line Width: 0.02
+    Name: True path (Gazebo)
+    Pose Style: None
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /mobile_base/true_trajectory
+    Value: true
+  - Class: rviz_default_plugins/Path
+    Color: 200; 120; 255
+    Enabled: true
+    Line Style: Lines
+    Line Width: 0.02
+    Name: Map pose (SLAM-corrected)
+    Pose Style: None
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /mobile_base/map_trajectory
+    Value: true
+  - Class: rviz_default_plugins/Path
+    Color: 0; 200; 220
+    Enabled: true
+    Line Style: Lines
+    Line Width: 0.01
+    Name: EKF (odom frame)
+    Pose Style: None
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /mobile_base/filtered_trajectory
+    Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: SLAM corrections
+    Namespaces: {}
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /localization/corrections
+    Value: true
+  - Alpha: 1
+    Axes Length: 0.2
+    Axes Radius: 0.02
+    Class: rviz_default_plugins/PoseWithCovariance
+    Color: 200; 120; 255
+    Covariance:
+      Orientation:
+        Alpha: 0.4
+        Color: 255; 255; 127
+        Color Style: Unique
+        Frame: Local
+        Offset: 1
+        Scale: 1
+        Value: false
+      Position:
+        Alpha: 0.35
+        Color: 200; 120; 255
+        Scale: 1
+        Value: true
+      Value: true
+    Enabled: true
+    Head Length: 0.08
+    Head Radius: 0.05
+    Name: SLAM pose + uncertainty
+    Shaft Length: 0.15
+    Shaft Radius: 0.02
+    Shape: Arrow
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /pose
+    Value: true
   Enabled: true
   Global Options:
     Background Color: 24; 48; 38

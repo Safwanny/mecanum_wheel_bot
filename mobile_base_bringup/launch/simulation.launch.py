@@ -585,6 +585,8 @@ def generate_launch_description():
                     '/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
                     '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
                     '/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
+                    '/ground_truth/odom@nav_msgs/msg/Odometry'
+                    '[gz.msgs.Odometry',
                     # Each ToF sensor scans an 8x8 grid, so Gazebo publishes
                     # an organised cloud on <topic>/points beside the
                     # flattened scan. The cloud is the one that keeps the

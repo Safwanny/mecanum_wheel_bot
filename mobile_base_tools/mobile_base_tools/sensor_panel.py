@@ -35,8 +35,8 @@ from nav_msgs.msg import Odometry
 from PyQt5.QtWidgets import (
     QApplication, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QVBoxLayout, QWidget)
-from std_msgs.msg import String
-from std_srvs.srv import SetBool
+from std_msgs.msg import Bool, String
+from std_srvs.srv import Trigger
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 import rclpy
@@ -247,7 +247,8 @@ class Telemetry(QWidget):
         ('level', 'Speed level'), ('limit', 'Limited by'),
         ('nearest', 'Nearest obstacle'), ('state', 'Navigator'),
         # Localisation
-        ('sigma', 'Pose uncertainty (1σ)'), ('gap', 'Wheel vs fused'),
+        ('sigma', 'Map σ (SLAM)'), ('error', 'True error'),
+        ('fix', 'Last SLAM fix'), ('gap', 'Wheel vs fused'),
         ('goal', 'To goal'),
     )
 
@@ -291,13 +292,18 @@ class SensorPanel(QWidget):
         all_off = QPushButton('All ToF off')
         all_on.clicked.connect(lambda: self.set_all(True))
         all_off.clicked.connect(lambda: self.set_all(False))
-        self.stop_button = QPushButton('STOP')
-        self.stop_button.setMinimumHeight(44)
-        self.stop_button.clicked.connect(self.toggle_stop)
-        self.stopped = False
-        self.style_stop()
         row = QHBoxLayout()
-        row.addWidget(self.stop_button)
+        # One stop: the e-stop gate, a twist_mux lock above every command
+        # source, teleop included. It starts engaged, so this button is also
+        # how a run is started. (The governor's own latch, /speed_governor/
+        # stop, only held autonomy and is left to the CLI.)
+        self.estop_button = QPushButton()
+        self.estop_button.setMinimumHeight(44)
+        self.estop_button.clicked.connect(self.toggle_estop)
+        self.estop = None        # None: no heartbeat from the gate
+        self.estop_seen = 0.0
+        self.style_estop()
+        row.addWidget(self.estop_button)
         for widget in (all_on, all_off):
             widget.setStyleSheet(
                 'QPushButton { background: #2E333A; border: 1px solid #6B7480;'
@@ -331,11 +337,19 @@ class SensorPanel(QWidget):
             String, '/speed_governor/status', self.on_governor, 10)
         node.create_subscription(
             Odometry, '/mobile_base_controller/odometry', self.on_wheel, 10)
-        self.stop_client = node.create_client(
-            SetBool, '/speed_governor/stop')
+        self.engage_client = node.create_client(Trigger, '/estop_gate/engage')
+        self.reset_client = node.create_client(Trigger, '/estop_gate/reset')
+        node.create_subscription(
+            Bool, '/safety/estop_active', self.on_estop, 10)
+        # The gate heartbeats at 10 Hz; silence means twist_mux is locked.
+        self.estop_timer = QTimer(self)
+        self.estop_timer.timeout.connect(self.check_estop)
+        self.estop_timer.start(500)
         node.create_subscription(
             String, '/bug_navigator/state', self.on_state, 10)
         node.create_subscription(PoseStamped, '/goal_pose', self.on_goal, 10)
+        node.create_subscription(
+            String, '/localization/status', self.on_localization, 10)
 
     def on_odometry(self, message):
         pose, twist = message.pose.pose, message.twist.twist
@@ -350,11 +364,6 @@ class SensorPanel(QWidget):
             vx, vy, twist.angular.z))
         show('heading', '{:+.1f}°'.format(math.degrees(yaw)))
         show('position', '{:+.2f}, {:+.2f} m'.format(*self.pose))
-        # Covariance diagonal: x at 0, y at 7, yaw at 35.
-        c = message.pose.covariance
-        show('sigma', '±{:.1f} cm  ±{:.1f}°'.format(
-            100.0 * math.sqrt(max(c[0], c[7], 0.0)),
-            math.degrees(math.sqrt(max(c[35], 0.0)))))
         if self.wheel is not None:
             # How far the fused pose has moved away from wheels alone: a
             # growing gap is slip, or the IMU correcting the wheels.
@@ -364,6 +373,23 @@ class SensorPanel(QWidget):
                                         math.cos(yaw - self.wheel[2])))))
         if self.goal is not None:
             show('goal', '{:.2f} m'.format(math.dist(self.pose, self.goal)))
+
+    def on_localization(self, message):
+        status = json.loads(message.data)
+        show = self.telemetry.set
+        if 'sigma_m' in status:
+            show('sigma', '±{:.1f} cm  ±{:.1f}°'.format(
+                100.0 * status['sigma_m'], status['sigma_deg']))
+        if 'error_m' in status:
+            show('error', '{:.1f} cm  {:+.1f}°  (max {:.0f})'.format(
+                100.0 * status['error_m'], status['error_deg'],
+                100.0 * status['error_max_m']))
+        fix = status.get('fix')
+        if fix:
+            show('fix', '{} {:.0f} cm {:.1f}°, {:.0f} s ago  ({}/min)'.format(
+                fix['kind'], 100.0 * fix['step_m'], fix['turn_deg'],
+                fix['age_s'], status['fixes_per_min']),
+                palette.CRITICAL if fix['kind'] == 'closure' else TEXT.name())
 
     def on_wheel(self, message):
         pose = message.pose.pose
@@ -386,24 +412,40 @@ class SensorPanel(QWidget):
                 'nearest', '{:.2f} m  at {:+.0f}°'.format(
                     status['nearest'], status['bearing']),
                 palette.warning_hex(status['nearest']))
-        if status['stopped'] != self.stopped:
-            self.stopped = status['stopped']
-            self.style_stop()
 
-    def toggle_stop(self):
-        if not self.stop_client.service_is_ready():
-            self.status.setText('speed_governor not running')
+    def on_estop(self, message):
+        self.estop_seen = self.node.get_clock().now().nanoseconds * 1e-9
+        if message.data != self.estop:
+            self.estop = message.data
+            self.style_estop()
+
+    def check_estop(self):
+        now = self.node.get_clock().now().nanoseconds * 1e-9
+        if self.estop is not None and now - self.estop_seen > 1.0:
+            self.estop = None
+            self.style_estop()
+
+    def toggle_estop(self):
+        # Unknown state counts as engaged: offer release, never assume clear.
+        client = self.engage_client if self.estop is False \
+            else self.reset_client
+        if not client.service_is_ready():
+            self.status.setText('estop_gate not running')
             return
-        self.stop_client.call_async(SetBool.Request(data=not self.stopped))
+        client.call_async(Trigger.Request())
 
-    def style_stop(self):
-        """Red STOP while driving is allowed; amber RELEASE while latched."""
-        if self.stopped:
-            text, colour = 'RELEASE', palette.CAUTION
+    def style_estop(self):
+        """The button names what a click does. Red STOP ROBOT while it may
+        move; green START ROBOT while stopped; grey when the gate is silent
+        (the robot is locked either way)."""
+        if self.estop is False:
+            text, colour = '■  STOP ROBOT', palette.CRITICAL
+        elif self.estop:
+            text, colour = '▶  START ROBOT', '#4CC38A'
         else:
-            text, colour = 'STOP', palette.CRITICAL
-        self.stop_button.setText(text)
-        self.stop_button.setStyleSheet(
+            text, colour = 'NO SAFETY LINK', palette.OFF
+        self.estop_button.setText(text)
+        self.estop_button.setStyleSheet(
             'QPushButton {{ background: {}; color: #111; border-radius: 6px;'
             ' font: bold 12pt; padding: 6px 28px; }}'.format(colour))
 

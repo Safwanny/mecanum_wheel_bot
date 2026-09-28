@@ -83,6 +83,14 @@ def generate_launch_description():
             }],
             output='screen',
         ),
+        # Where SLAM corrected the pose, and how far it is from the truth.
+        Node(
+            package='mobile_base_tools',
+            executable='localization_monitor',
+            name='localization_monitor',
+            parameters=[sim_time],
+            output='screen',
+        ),
         Node(
             package='mobile_base_tools',
             executable='nav_supervisor',
