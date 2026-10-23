@@ -20,10 +20,11 @@ mobile_base_controller:
     kinematics:
       base_frame_offset: {x: 0.0, y: 0.0, theta: 0.0}
       wheels_radius: 0.02996
-      # Rev D geometry is 0.105 + 0.09325 = 0.19825. The anisotropic contact
-      # model over-rotates by the prototype's measured 1.1341, so start from
-      # 0.19825 / 1.1341 and re-measure (docs/mecanum_motion_accuracy.md).
-      sum_of_robot_center_projection_on_X_Y_axis: 0.17481
+      # Rev D geometry is 0.105 + 0.09325 = 0.19825. Calibrated against
+      # Gazebo ground truth: at 0.17481 odometry read 136.9 deg for a true
+      # 131.0 deg turn, so 0.17481 * 136.9 / 131.0. Model-coupled like the
+      # prototype's (docs/mecanum_motion_accuracy.md); re-measure on hardware.
+      sum_of_robot_center_projection_on_X_Y_axis: 0.18268
 
     base_frame_id: base_footprint
     odom_frame_id: odom

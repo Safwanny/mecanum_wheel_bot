@@ -27,7 +27,11 @@ import xml.etree.ElementTree as ET
 from ament_index_python.packages import get_package_share_directory
 
 
-MESH_URI_PREFIX = 'package://mobile_base_description/'
+# gz sdf -p rewrites package:// to model://, so both forms can appear.
+MESH_URI_PREFIXES = (
+    'package://mobile_base_description/',
+    'model://mobile_base_description/',
+)
 WHEEL_NAMES = ('front_left', 'front_right', 'rear_right', 'rear_left')
 WHEEL_RADIUS = 0.02996
 WHEEL_WIDTH = 0.0315
@@ -180,11 +184,15 @@ def _rewrite_mesh_uris(root):
     """Point every package:// mesh at its installed file; Gazebo cannot resolve them."""
     share = Path(get_package_share_directory('mobile_base_description'))
     for uri in root.findall('.//uri'):
-        if uri.text and uri.text.startswith(MESH_URI_PREFIX):
-            path = share / uri.text[len(MESH_URI_PREFIX):]
-            if not path.is_file():
-                raise RuntimeError('Missing installed mesh: ' + uri.text)
-            uri.text = path.resolve().as_uri()
+        for prefix in MESH_URI_PREFIXES:
+            if uri.text and uri.text.startswith(prefix):
+                path = share / uri.text[len(prefix):]
+                if not path.is_file():
+                    raise RuntimeError('Missing installed mesh: ' + uri.text)
+                uri.text = path.resolve().as_uri()
+        # Anything left unresolved draws nothing in Gazebo, silently.
+        if uri.text and uri.text.endswith('.stl') and not uri.text.startswith('file://'):
+            raise RuntimeError('Unresolved mesh URI: ' + uri.text)
 
 
 def main():
