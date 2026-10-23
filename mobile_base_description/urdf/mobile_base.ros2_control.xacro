@@ -15,8 +15,8 @@
       <xacro:macro name="wheel_interface" params="joint_name">
         <joint name="${prefix}${joint_name}">
           <command_interface name="velocity">
-            <param name="min">-25.0</param>
-            <param name="max">25.0</param>
+            <param name="min">${-wheel_max_velocity}</param>
+            <param name="max">${wheel_max_velocity}</param>
           </command_interface>
           <state_interface name="position"/>
           <state_interface name="velocity"/>

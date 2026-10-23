@@ -33,7 +33,7 @@ def main():
     assert 'base_frame_id: base_footprint' in controllers
     assert 'odom_frame_id: odom' in controllers
     assert 'reference_timeout: 0.5' in controllers
-    assert 'sum_of_robot_center_projection_on_X_Y_axis: 0.12521' \
+    assert 'sum_of_robot_center_projection_on_X_Y_axis: 0.17481' \
         in controllers
 
     launch = read(bringup / 'launch' / 'simulation.launch.py')

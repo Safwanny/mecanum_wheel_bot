@@ -24,31 +24,11 @@ if(BUILD_TESTING)
     COMMAND xacro ${CMAKE_CURRENT_SOURCE_DIR}/urdf/mobile_base.urdf.xacro
   )
 
-  # The deck plate mesh is generated from properties.xacro. Regenerate and
-  # compare, so an edit to the body geometry cannot leave a stale mesh behind.
-  add_test(
-    NAME verify_deck_mesh
-    COMMAND
-      ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_deck_mesh.py
-      --properties ${CMAKE_CURRENT_SOURCE_DIR}/urdf/properties.xacro
-      --output ${CMAKE_CURRENT_SOURCE_DIR}/../meshes/decks/deck_plate.stl
-      --check
-  )
-
   add_test(
     NAME verify_mecanum_wheels
     COMMAND
       ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/test/test_mecanum_wheels.py
-      ${CMAKE_CURRENT_SOURCE_DIR}/urdf/mobile_base.urdf.xacro
-  )
-
-  add_test(
-    NAME verify_sensor_description
-    COMMAND
-      ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sensor_description.py
       ${CMAKE_CURRENT_SOURCE_DIR}/urdf/mobile_base.urdf.xacro
   )
 endif()

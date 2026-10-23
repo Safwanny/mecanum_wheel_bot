@@ -16,11 +16,10 @@
 """
 Launch Gazebo headlessly and verify the ROS sensor topic contract.
 
-Runs in my_world since sensor_test was retired. Nothing here asserts
-world geometry - the checks are on frame ids, message shape, finiteness
-and covariances. The one world-dependent requirement is that the LiDAR
-returns something finite, and the robot spawns in the hall with walls
-1.5 m away against a 4.0 m range, so that holds with margin.
+Runs in my_world. Nothing here asserts world geometry - the checks are on
+frame ids, message shape, finiteness and covariances. Rev D carries only the
+IMU so far; LiDAR, camera and ToF checks return with those sensors (see the
+prototype-gnd tag for their old form).
 """
 
 import math
@@ -36,13 +35,8 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image, Imu, LaserScan, PointCloud2
+from sensor_msgs.msg import Imu
 from tf2_msgs.msg import TFMessage
-
-
-TOF_FACES = ('front', 'rear', 'left', 'right',
-             'front_left', 'front_right', 'rear_left', 'rear_right')
-TOF_ZONES = 8
 
 
 def generate_test_description():
@@ -81,12 +75,8 @@ class TestSensorTopics(unittest.TestCase):
         cls.node.destroy_node()
         rclpy.shutdown()
 
-    def test_lidar_and_imu_messages(self):
-        received = {
-            'scan': None, 'imu': None, 'camera': None, 'filtered': None,
-        }
-        for face in TOF_FACES:
-            received[f'tof_{face}'] = None
+    def test_imu_and_odometry_messages(self):
+        received = {'imu': None, 'filtered': None}
         odom_tf_received = False
 
         def tf_callback(message):
@@ -100,21 +90,9 @@ class TestSensorTopics(unittest.TestCase):
 
         subscriptions = [
             self.node.create_subscription(
-                LaserScan,
-                '/scan',
-                lambda message: received.__setitem__('scan', message),
-                qos_profile_sensor_data,
-            ),
-            self.node.create_subscription(
                 Imu,
                 '/imu/data',
                 lambda message: received.__setitem__('imu', message),
-                qos_profile_sensor_data,
-            ),
-            self.node.create_subscription(
-                Image,
-                '/camera/image_raw',
-                lambda message: received.__setitem__('camera', message),
                 qos_profile_sensor_data,
             ),
             self.node.create_subscription(
@@ -125,24 +103,11 @@ class TestSensorTopics(unittest.TestCase):
             ),
             self.node.create_subscription(TFMessage, '/tf', tf_callback, 10),
         ]
-        subscriptions += [
-            self.node.create_subscription(
-                PointCloud2,
-                f'/tof/{face}/points',
-                lambda message, key=f'tof_{face}':
-                    received.__setitem__(key, message),
-                qos_profile_sensor_data,
-            )
-            for face in TOF_FACES
-        ]
         deadline = time.monotonic() + 90.0
         while time.monotonic() < deadline and (
                 None in received.values() or not odom_tf_received):
             rclpy.spin_once(self.node, timeout_sec=0.2)
-        self.assertIsNotNone(received['scan'], 'no /scan message received')
         self.assertIsNotNone(received['imu'], 'no /imu/data message received')
-        self.assertIsNotNone(
-            received['camera'], 'no /camera/image_raw message received')
         self.assertIsNotNone(
             received['filtered'], 'no /odometry/filtered message received')
         self.assertTrue(odom_tf_received)
@@ -163,39 +128,6 @@ class TestSensorTopics(unittest.TestCase):
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
         self.assertTrue(future.done())
         self.assertFalse(future.result().values[0].bool_value)
-
-        scan = received['scan']
-        self.assertEqual(scan.header.frame_id, 'lidar_link')
-        self.assertGreater(scan.header.stamp.sec + scan.header.stamp.nanosec, 0)
-        self.assertGreater(len(scan.ranges), 100)
-        self.assertEqual(len(scan.ranges), len(scan.intensities))
-        self.assertLess(scan.angle_min, scan.angle_max)
-        self.assertGreater(scan.angle_increment, 0.0)
-        self.assertGreater(scan.range_min, 0.0)
-        self.assertAlmostEqual(scan.range_max, 4.0, delta=0.01)
-        finite_ranges = [value for value in scan.ranges if math.isfinite(value)]
-        self.assertTrue(finite_ranges)
-        self.assertTrue(all(scan.range_min <= value <= scan.range_max
-                            for value in finite_ranges))
-
-        # The four ToF sensors each scan an 8 x 8 zone grid, so Gazebo should
-        # hand back an organised cloud: 64 points in grid order with the zones
-        # that saw nothing left non-finite. That layout is what lets the ray
-        # markers draw a segment for every zone rather than only for the ones
-        # that returned, so it is asserted rather than assumed - if Gazebo ever
-        # delivers a cloud filtered down to hits, this is where it surfaces.
-        for face in TOF_FACES:
-            cloud = received[f'tof_{face}']
-            self.assertIsNotNone(
-                cloud, f'no /tof/{face}/points message received')
-            self.assertEqual(cloud.header.frame_id, f'tof_{face}_link')
-            self.assertGreater(
-                cloud.header.stamp.sec + cloud.header.stamp.nanosec, 0)
-            self.assertEqual(
-                cloud.height * cloud.width, TOF_ZONES * TOF_ZONES,
-                f'/tof/{face}/points is not an organised '
-                f'{TOF_ZONES}x{TOF_ZONES} grid: '
-                f'height={cloud.height} width={cloud.width}')
 
         imu = received['imu']
         self.assertEqual(imu.header.frame_id, 'imu_link')

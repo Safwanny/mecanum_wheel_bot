@@ -45,8 +45,8 @@ def build_model(collision_counts=None):
                 link, 'collision', {'name': f'wheel_collision_{index}'})
             geometry = ET.SubElement(collision, 'geometry')
             cylinder = ET.SubElement(geometry, 'cylinder')
-            ET.SubElement(cylinder, 'radius').text = '0.03074443'
-            ET.SubElement(cylinder, 'length').text = '0.03360543'
+            ET.SubElement(cylinder, 'radius').text = '0.02996'
+            ET.SubElement(cylinder, 'length').text = '0.0315'
         ET.SubElement(
             model, 'joint',
             {'name': f'{wheel}_wheel_joint', 'type': 'revolute'})

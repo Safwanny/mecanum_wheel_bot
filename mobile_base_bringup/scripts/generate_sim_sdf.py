@@ -27,44 +27,10 @@ import xml.etree.ElementTree as ET
 from ament_index_python.packages import get_package_share_directory
 
 
-WHEEL_URI_PREFIXES = (
-    'package://mobile_base_description/meshes/wheels/',
-    'package://mobile_base/meshes/wheels/',
-    'model://mobile_base/meshes/wheels/',
-    'model://mobile_base_description/meshes/wheels/',
-)
-MOTOR_URI_PREFIXES = (
-    'package://mobile_base_description/meshes/motors/',
-    'package://mobile_base/meshes/motors/',
-    'model://mobile_base/meshes/motors/',
-    'model://mobile_base_description/meshes/motors/',
-)
-DECK_URI_PREFIXES = (
-    'package://mobile_base_description/meshes/decks/',
-    'package://mobile_base/meshes/decks/',
-    'model://mobile_base/meshes/decks/',
-    'model://mobile_base_description/meshes/decks/',
-)
-COMPONENT_URI_PREFIXES = (
-    'package://mobile_base_description/meshes/electronics/',
-    'package://mobile_base/meshes/electronics/',
-    'model://mobile_base/meshes/electronics/',
-    'model://mobile_base_description/meshes/electronics/',
-)
-MOTOR_FILES = {'tt_gearmotor.stl'}
-# The battery is a plain box, so only the boards appear here.
-COMPONENT_FILES = {'esp32_s3_devkit_shield.stl', 'tb6612fng.stl'}
-COMPONENT_MESH_REFERENCES = 3
-# One generated plate mesh, used once per deck.
-DECK_FILES = {'deck_plate.stl'}
-DECK_MESH_REFERENCES = 2
-WHEEL_FILES = {
-    'mecanum_wheel_FL.stl', 'mecanum_wheel_FR.stl',
-    'mecanum_wheel_RL.stl', 'mecanum_wheel_RR.stl',
-}
+MESH_URI_PREFIX = 'package://mobile_base_description/'
 WHEEL_NAMES = ('front_left', 'front_right', 'rear_right', 'rear_left')
-WHEEL_RADIUS = 0.03074443
-WHEEL_WIDTH = 0.03360543
+WHEEL_RADIUS = 0.02996
+WHEEL_WIDTH = 0.0315
 WHEEL_CONTACT_MU = 0.8
 WHEEL_CONTACT_MU2 = 0.2
 WHEEL_CONTACT_SLIP1 = 0.0
@@ -79,47 +45,6 @@ WHEEL_DIRECTION_SIGN = {
     'rear_left': 1.0,
 }
 PASSIVE_ROLLER_BODY = re.compile(r'_roller_[0-9]+_(?:link|joint)$')
-
-
-def _wheel_file_uris():
-    share = Path(get_package_share_directory('mobile_base_description'))
-    wheels = share / 'meshes' / 'wheels'
-    missing = sorted(name for name in WHEEL_FILES if not (wheels / name).is_file())
-    if missing:
-        raise RuntimeError('Missing installed wheel meshes: ' + ', '.join(missing))
-    return {name: (wheels / name).resolve().as_uri() for name in WHEEL_FILES}
-
-
-def _motor_file_uris():
-    share = Path(get_package_share_directory('mobile_base_description'))
-    motors = share / 'meshes' / 'motors'
-    missing = sorted(name for name in MOTOR_FILES if not (motors / name).is_file())
-    if missing:
-        raise RuntimeError('Missing installed motor meshes: ' + ', '.join(missing))
-    return {name: (motors / name).resolve().as_uri() for name in MOTOR_FILES}
-
-
-def _component_file_uris():
-    share = Path(get_package_share_directory('mobile_base_description'))
-    electronics = share / 'meshes' / 'electronics'
-    missing = sorted(
-        name for name in COMPONENT_FILES if not (electronics / name).is_file())
-    if missing:
-        raise RuntimeError(
-            'Missing installed component meshes: ' + ', '.join(missing))
-    return {
-        name: (electronics / name).resolve().as_uri()
-        for name in COMPONENT_FILES
-    }
-
-
-def _deck_file_uris():
-    share = Path(get_package_share_directory('mobile_base_description'))
-    decks = share / 'meshes' / 'decks'
-    missing = sorted(name for name in DECK_FILES if not (decks / name).is_file())
-    if missing:
-        raise RuntimeError('Missing installed deck meshes: ' + ', '.join(missing))
-    return {name: (decks / name).resolve().as_uri() for name in DECK_FILES}
 
 
 def _nonnegative_finite(value, field):
@@ -251,87 +176,15 @@ def validate_mecanum_wheel_contact(root):
                 f'{FRICTION_FRAME}')
 
 
-def _rewrite_wheel_mesh_uris(root):
-    wheel_file_uris = _wheel_file_uris()
-    referenced = []
+def _rewrite_mesh_uris(root):
+    """Point every package:// mesh at its installed file; Gazebo cannot resolve them."""
+    share = Path(get_package_share_directory('mobile_base_description'))
     for uri in root.findall('.//uri'):
-        for prefix in WHEEL_URI_PREFIXES:
-            if uri.text and uri.text.startswith(prefix):
-                mesh_name = uri.text[len(prefix):]
-                if mesh_name not in wheel_file_uris:
-                    raise RuntimeError('Unresolved wheel visual URI: ' + uri.text)
-                uri.text = wheel_file_uris[mesh_name]
-                referenced.append(mesh_name)
-                break
-    if (len(referenced) != 4 or set(referenced) != WHEEL_FILES
-            or any(referenced.count(name) != 1 for name in WHEEL_FILES)):
-        raise RuntimeError(
-            'Generated SDF must reference each wheel visual mesh exactly once')
-
-
-def _rewrite_motor_mesh_uris(root):
-    """Resolve the shared motor mesh to an absolute path for Gazebo."""
-    # All four motor links reuse one mesh, so unlike the wheels this counts
-    # references rather than requiring each file exactly once.
-    motor_file_uris = _motor_file_uris()
-    referenced = 0
-    for uri in root.findall('.//uri'):
-        for prefix in MOTOR_URI_PREFIXES:
-            if uri.text and uri.text.startswith(prefix):
-                mesh_name = uri.text[len(prefix):]
-                if mesh_name not in motor_file_uris:
-                    raise RuntimeError('Unresolved motor visual URI: ' + uri.text)
-                uri.text = motor_file_uris[mesh_name]
-                referenced += 1
-                break
-    if referenced != 4:
-        raise RuntimeError(
-            'Generated SDF must reference the motor visual mesh once per '
-            f'motor; found {referenced}')
-
-
-def _rewrite_component_mesh_uris(root):
-    """Resolve the deck component meshes to absolute paths for Gazebo."""
-    # Like the motors and unlike the wheels this counts references rather than
-    # requiring each file once: the two motor drivers share one mesh. An
-    # unrewritten URI is not a cosmetic problem - Gazebo cannot resolve a
-    # package:// path and the part silently vanishes from the scene, so the
-    # count is asserted rather than left to a visual check.
-    component_file_uris = _component_file_uris()
-    referenced = 0
-    for uri in root.findall('.//uri'):
-        for prefix in COMPONENT_URI_PREFIXES:
-            if uri.text and uri.text.startswith(prefix):
-                mesh_name = uri.text[len(prefix):]
-                if mesh_name not in component_file_uris:
-                    raise RuntimeError(
-                        'Unresolved component visual URI: ' + uri.text)
-                uri.text = component_file_uris[mesh_name]
-                referenced += 1
-                break
-    if referenced != COMPONENT_MESH_REFERENCES:
-        raise RuntimeError(
-            'Generated SDF must reference the component visual meshes '
-            f'{COMPONENT_MESH_REFERENCES} times; found {referenced}')
-
-
-def _rewrite_deck_mesh_uris(root):
-    """Resolve the generated deck plate mesh to an absolute path for Gazebo."""
-    deck_file_uris = _deck_file_uris()
-    referenced = 0
-    for uri in root.findall('.//uri'):
-        for prefix in DECK_URI_PREFIXES:
-            if uri.text and uri.text.startswith(prefix):
-                mesh_name = uri.text[len(prefix):]
-                if mesh_name not in deck_file_uris:
-                    raise RuntimeError('Unresolved deck visual URI: ' + uri.text)
-                uri.text = deck_file_uris[mesh_name]
-                referenced += 1
-                break
-    if referenced != DECK_MESH_REFERENCES:
-        raise RuntimeError(
-            'Generated SDF must reference the deck plate mesh once per deck; '
-            f'expected {DECK_MESH_REFERENCES}, found {referenced}')
+        if uri.text and uri.text.startswith(MESH_URI_PREFIX):
+            path = share / uri.text[len(MESH_URI_PREFIX):]
+            if not path.is_file():
+                raise RuntimeError('Missing installed mesh: ' + uri.text)
+            uri.text = path.resolve().as_uri()
 
 
 def main():
@@ -353,10 +206,7 @@ def main():
             check=True, capture_output=True, text=True).stdout
 
     root = ET.fromstring(sdf)
-    _rewrite_wheel_mesh_uris(root)
-    _rewrite_motor_mesh_uris(root)
-    _rewrite_component_mesh_uris(root)
-    _rewrite_deck_mesh_uris(root)
+    _rewrite_mesh_uris(root)
     inject_wheel_surfaces(root)
     validate_mecanum_wheel_contact(root)
     ET.ElementTree(root).write(

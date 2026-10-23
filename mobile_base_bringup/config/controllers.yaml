@@ -19,9 +19,11 @@ mobile_base_controller:
 
     kinematics:
       base_frame_offset: {x: 0.0, y: 0.0, theta: 0.0}
-      wheels_radius: 0.03074443
-      # Effective rotational projection for the canonical wheel contact model.
-      sum_of_robot_center_projection_on_X_Y_axis: 0.12521
+      wheels_radius: 0.02996
+      # Rev D geometry is 0.105 + 0.09325 = 0.19825. The anisotropic contact
+      # model over-rotates by the prototype's measured 1.1341, so start from
+      # 0.19825 / 1.1341 and re-measure (docs/mecanum_motion_accuracy.md).
+      sum_of_robot_center_projection_on_X_Y_axis: 0.17481
 
     base_frame_id: base_footprint
     odom_frame_id: odom

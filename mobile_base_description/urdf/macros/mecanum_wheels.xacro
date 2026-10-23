@@ -1,15 +1,13 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:macro name="mecanum_wheel"
-               params="prefix name parent x y z mesh visual_xyz
-                       visual_rpy">
+  <!-- One driven wheel. The mesh is in the joint frame (origin on the axle at
+       the wheel centre, metres) and carries the motor shaft, coupler and axle,
+       so the whole drive line turns with the joint. -->
+  <xacro:macro name="mecanum_wheel" params="prefix name mesh x y">
     <link name="${prefix}${name}_wheel_link">
       <visual>
-        <origin xyz="${visual_xyz}" rpy="${visual_rpy}"/>
         <geometry>
-          <mesh
-            filename="package://mobile_base_description/meshes/wheels/${mesh}"
-            scale="0.001 0.001 0.001"/>
+          <mesh filename="package://mobile_base_description/meshes/rev_d/${mesh}"/>
         </geometry>
         <material name="wheel_orange"/>
       </visual>
@@ -21,28 +19,24 @@
         </geometry>
       </collision>
 
-      <xacro:cylinder_inertial mass="${wheel_mass}"
-                               radius="${wheel_inertial_radius}"
+      <xacro:cylinder_inertial mass="${wheel_mass}" radius="${wheel_radius}"
                                length="${wheel_width}">
         <origin xyz="0 0 0" rpy="${pi / 2.0} 0 0"/>
       </xacro:cylinder_inertial>
     </link>
 
     <joint name="${prefix}${name}_wheel_joint" type="continuous">
-      <parent link="${prefix}${parent}"/>
+      <parent link="${prefix}base_link"/>
       <child link="${prefix}${name}_wheel_link"/>
-      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+      <origin xyz="${x} ${y} 0" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <dynamics damping="${wheel_joint_damping}"
                 friction="${wheel_joint_friction}"/>
-      <limit effort="8.0" velocity="25.0"/>
+      <limit effort="8.0" velocity="${wheel_max_velocity}"/>
     </joint>
 
-    <!--
-      No contact parameters are authored here because gz sdf -p discards the
-      relevant URDF extension tags. generate_sim_sdf.py injects the canonical
-      anisotropic wheel surface after conversion.
-    -->
+    <!-- No contact parameters here: gz sdf -p drops them. generate_sim_sdf.py
+         injects the anisotropic mecanum surface after conversion. -->
     <gazebo reference="${prefix}${name}_wheel_link">
       <selfCollide>false</selfCollide>
     </gazebo>

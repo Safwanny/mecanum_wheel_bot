@@ -24,15 +24,16 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 
+# Rev D: wheelbase 210, track 186.5, roller envelope 59.92, 31.5 wide.
 WHEELS = {
-    'front_left': ((0.075, 0.067), 'mecanum_wheel_FL.stl'),
-    'front_right': ((0.075, -0.067), 'mecanum_wheel_FR.stl'),
-    'rear_right': ((-0.075, -0.067), 'mecanum_wheel_RR.stl'),
-    'rear_left': ((-0.075, 0.067), 'mecanum_wheel_RL.stl'),
+    'front_left': ((0.105, 0.09325), 'wheel_fl.stl'),
+    'front_right': ((0.105, -0.09325), 'wheel_fr.stl'),
+    'rear_right': ((-0.105, -0.09325), 'wheel_rr.stl'),
+    'rear_left': ((-0.105, 0.09325), 'wheel_rl.stl'),
 }
-RADIUS = 0.03074443
-WIDTH = 0.03360543
-MASS = 0.12
+RADIUS = 0.02996
+WIDTH = 0.0315
+MASS = 0.08
 
 
 def vector(text):
@@ -66,8 +67,9 @@ def validate(xacro_file):
         assert len(visuals) == 1
         uri = visuals[0].find('geometry/mesh').attrib['filename']
         assert uri.endswith('/' + mesh_file)
-        assert visuals[0].find('geometry/mesh').attrib['scale'] == \
-            '0.001 0.001 0.001'
+        # Metres, in the joint frame: no scale and no visual offset.
+        assert 'scale' not in visuals[0].find('geometry/mesh').attrib
+        assert visuals[0].find('origin') is None
 
         collisions = link.findall('collision')
         assert len(collisions) == 1
@@ -90,7 +92,7 @@ def validate(xacro_file):
         assert joint.find('parent').attrib['link'] == 'base_link'
         assert joint.find('child').attrib['link'] == link_name
         origin = vector(joint.find('origin').attrib['xyz'])
-        assert origin[:2] == position
+        assert origin == (*position, 0.0)
         assert vector(joint.find('axis').attrib['xyz']) == (0.0, 1.0, 0.0)
         dynamics = joint.find('dynamics')
         assert float(dynamics.attrib['damping']) == 0.001
