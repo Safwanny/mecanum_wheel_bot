@@ -42,5 +42,6 @@ setup(
         'nav_supervisor = mobile_base_tools.nav_supervisor:main',
         'tf_validator = mobile_base_tools.tf_validator:main',
         'stop_simulation = mobile_base_tools.stop_simulation:main',
+        'tof_particles = mobile_base_tools.tof_particles:main',
     ]},
 )

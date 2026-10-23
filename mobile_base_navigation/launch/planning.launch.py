@@ -102,6 +102,8 @@ def generate_launch_description():
         DeclareLaunchArgument('yaw', default_value='0.0'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='true'),
+        # A second RViz, orbiting the robot, showing the ToF particle memory.
+        DeclareLaunchArgument('particle_rviz', default_value='true'),
         DeclareLaunchArgument('render_engine', default_value='ogre2'),
         # The costmaps cannot produce anything meaningful before AMCL
         # publishes map -> odom, and AMCL publishes nothing until an initial
@@ -428,6 +430,16 @@ def generate_launch_description():
             arguments=['-d', LaunchConfiguration('rviz_config')],
             parameters=[use_sim_time],
             condition=IfCondition(LaunchConfiguration('phase3_rviz')),
+            output='screen',
+        ),
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            name='tof_particles_rviz',
+            arguments=['-d', PathJoinSubstitution(
+                [share, 'rviz', 'tof_particles.rviz'])],
+            parameters=[use_sim_time],
+            condition=IfCondition(LaunchConfiguration('particle_rviz')),
             output='screen',
         ),
     ])

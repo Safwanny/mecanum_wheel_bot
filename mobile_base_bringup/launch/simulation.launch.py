@@ -690,6 +690,24 @@ def generate_launch_description():
             ),
             Node(
                 package='mobile_base_tools',
+                executable='tof_particles',
+                name='tof_particles',
+                # Remembers the classifier's hits in odom; the local costmap
+                # and the particle view both read /tof/particles.
+                condition=IfCondition(
+                    LaunchConfiguration('tof_classifier')
+                ),
+                parameters=[
+                    {
+                        'use_sim_time': LaunchConfiguration(
+                            'use_sim_time'
+                        )
+                    }
+                ],
+                output='screen',
+            ),
+            Node(
+                package='mobile_base_tools',
                 executable='tof_ray_markers',
                 name='tof_ray_markers',
                 condition=IfCondition(
