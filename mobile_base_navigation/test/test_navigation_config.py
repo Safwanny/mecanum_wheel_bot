@@ -201,7 +201,16 @@ def main():
     assert global_costmap['obstacle_layer'][
         'observation_sources'].split() == ['scan']
     assert local_costmap['obstacle_layer'][
-        'observation_sources'].split() == ['scan'] + list(TOF_SOURCES)
+        'observation_sources'].split() == ['scan']
+    # The ring has its own voxel layer: in the scan's 2D layer the LiDAR's
+    # clearing rays pass over a low obstacle and erase the ToF mark.
+    tof_layer = local_costmap['tof_layer']
+    assert tof_layer['plugin'] == (
+        'spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer')
+    assert tof_layer['observation_sources'].split() == list(TOF_SOURCES)
+    # Decay is the only clearing: the merged cloud has no sensor origin.
+    assert tof_layer['voxel_decay'] > 0
+    assert tof_layer['publish_voxel_map'] is True
 
     for costmap in (global_costmap, local_costmap):
         layer = costmap['obstacle_layer']
@@ -219,23 +228,23 @@ def main():
         assert scan['obstacle_max_range'] < LIDAR_MAX_RANGE
         assert scan['raytrace_max_range'] < LIDAR_MAX_RANGE
 
-        # The ToF sources carry pre-classified points: the floor is filtered
-        # out upstream, so these must never be asked to do it with a height
-        # cut, and they must stay inside the geometric ceiling.
-        for name in [n for n in sources if n in TOF_SOURCES]:
-            source = layer[name]
-            assert source['topic'] == f'/{name.replace("_", "/", 1)}'
-            assert source['data_type'] == 'PointCloud2'
-            assert source['marking'] is True
-            assert source['obstacle_max_range'] <= TOF_WALL_RANGE
-            assert source['raytrace_max_range'] < TOF_SENSOR_RANGE
-            # Overhangs above the roof are dropped by the classifier; what it
-            # still publishes above the roof is confirmed wall, which past
-            # ~1 m is only ever seen above it. So the cut here must let walls
-            # through: up to where the top row meets a wall at the 2 m wall
-            # range (28.5 mm + 2 m * tan 30 deg, about 1.18 m).
-            assert source['max_obstacle_height'] > ROBOT_HEIGHT
-            assert source['max_obstacle_height'] >= 1.2
+    # The ToF sources carry pre-classified points: the floor is filtered out
+    # upstream, so these must never be asked to do it with a height cut, and
+    # they must stay inside the geometric ceiling.
+    for name in TOF_SOURCES:
+        source = tof_layer[name]
+        assert source['topic'] == f'/{name.replace("_", "/", 1)}'
+        assert source['data_type'] == 'PointCloud2'
+        assert source['marking'] is True
+        assert source['clearing'] is False
+        assert source['obstacle_range'] <= TOF_WALL_RANGE
+        # Overhangs above the roof are dropped by the classifier; what it
+        # still publishes above the roof is confirmed wall, which past ~1 m
+        # is only ever seen above it. So the cut here must let walls through:
+        # up to where the top row meets a wall at the 2 m wall range
+        # (28.5 mm + 2 m * tan 30 deg, about 1.18 m).
+        assert source['max_obstacle_height'] > ROBOT_HEIGHT
+        assert source['max_obstacle_height'] >= 1.2
 
     # Frames. Nav2 defaults robot_base_frame to base_link, which this repo
     # does not use for the odometry chain; the local costmap rolls in odom.
@@ -249,11 +258,13 @@ def main():
     assert global_costmap['static_layer']['map_subscribe_transient_local'
                                           ] is True
 
-    # Layer choices: no VoxelLayer, since there is no 3D sensor to fill it.
+    # Layer choices: the global costmap never takes the ToF ring.
     assert global_costmap['plugins'] == [
         'static_layer', 'obstacle_layer', 'inflation_layer'
     ]
-    assert local_costmap['plugins'] == ['obstacle_layer', 'inflation_layer']
+    assert local_costmap['plugins'] == [
+        'obstacle_layer', 'tof_layer', 'inflation_layer'
+    ]
 
     # Jazzy requires the '::' plugin separator; '/' strings fail at load.
     assert planner['planner_plugins'] == ['GridBased']
@@ -264,6 +275,9 @@ def main():
         plugins = _plugin_strings(config)
         assert plugins
         for plugin in plugins:
+            # STVL registers itself with '/', so it is the one exception.
+            if plugin.startswith('spatio_temporal_voxel_layer/'):
+                continue
             assert '::' in plugin
             assert '/' not in plugin
 
@@ -430,6 +444,10 @@ def main():
     # a scan source would imply a filter that is never applied.
     assert 'min_height' not in monitor['scan']
     assert 'max_height' not in monitor['scan']
+    # The last-resort stop must see the band under the scan plane too.
+    assert monitor['observation_sources'] == ['scan', 'tof']
+    assert monitor['tof']['topic'] == '/tof/obstacles'
+    assert monitor['tof']['max_height'] >= 1.2
 
     # --- Single arbiter. Exactly one node may publish the driver-facing
     # command, and it must be the mux. Anything else reaching that topic is a

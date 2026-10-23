@@ -28,6 +28,7 @@ REQUIRED_SYSTEMS = {
     'gz-sim-sensors-system',
     'gz-sim-imu-system',
 }
+LIDAR_PLANE_M = 0.0915
 EXPECTED_WORLDS = {
     'navigation_basic.sdf',
     'my_world.sdf',
@@ -63,6 +64,14 @@ def main():
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+        # low_* models exist to be invisible to the LiDAR: top below its plane.
+        for model in world.findall('./model[@name]'):
+            if not model.get('name').startswith('low_'):
+                continue
+            z = float(model.findtext('pose').split()[2])
+            name = model.get('name')
+            assert 2 * z < LIDAR_PLANE_M, f'{name} reaches the scan'
 
     cmake = (package / 'CMakeLists.txt').read_text(encoding='utf-8')
     assert 'install(DIRECTORY worlds DESTINATION share/${PROJECT_NAME})' in cmake

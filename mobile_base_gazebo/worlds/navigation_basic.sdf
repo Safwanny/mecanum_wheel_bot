@@ -71,5 +71,43 @@
       <link name="link"><collision name="collision"><geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry></collision>
         <visual name="visual"><geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry></visual></link>
     </model>
+
+    <!-- Low obstacles: every top sits under the 0.0915 m LiDAR plane, so only
+         the ToF ring can see them. Names start with low_ for test_worlds.py. -->
+    <model name="low_shoe">
+      <static>true</static><pose>0.9 0.1 0.035 0 0 0.4</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.30 0.12 0.07</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.30 0.12 0.07</size></box></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material>
+        </visual></link>
+    </model>
+    <model name="low_doorsill">
+      <static>true</static><pose>-0.2 -2.0 0.015 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.10 1.2 0.03</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.10 1.2 0.03</size></box></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material>
+        </visual></link>
+    </model>
+    <model name="low_cable">
+      <static>true</static><pose>-1.0 1.4 0.02 1.5708 0 0.3</pose>
+      <link name="link"><collision name="collision"><geometry><cylinder><radius>0.02</radius><length>0.9</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.02</radius><length>0.9</length></cylinder></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material>
+        </visual></link>
+    </model>
+    <model name="low_step">
+      <static>true</static><pose>3.3 0.8 0.03 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><box><size>0.45 0.45 0.06</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.45 0.45 0.06</size></box></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material>
+        </visual></link>
+    </model>
+    <model name="low_bowl">
+      <static>true</static><pose>-3.0 -2.3 0.035 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><cylinder><radius>0.12</radius><length>0.07</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.12</radius><length>0.07</length></cylinder></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material>
+        </visual></link>
+    </model>
   </world>
 </sdf>

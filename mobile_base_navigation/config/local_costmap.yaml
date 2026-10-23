@@ -16,22 +16,28 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      # Must match the global costmap; see planner.yaml for the derivation.
-      # The tightest circle that holds the body at every heading: the
-      # circumscribed radius is 0.1547 m (end-cap corner at the wheels' outer
-      # faces). Any smaller and some heading puts a corner in the wall.
-      robot_radius: 0.155
-      # Stated, not left to the 0.01 default: this is the margin for
-      # localisation and control error, and it sits on top of the radius.
-      footprint_padding: 0.01
+      # The real body, 260 x 168 mm (corners at the wheels' outer faces, the
+      # 0.1547 m circumscribed radius). A circle of that radius was 71 mm
+      # wider than the body on each side and shut every gap under ~0.33 m;
+      # the rectangle lets the holonomic base strafe through anything wider
+      # than the body. Turning in place still needs the full circle, and the
+      # footprint-checking critics see that heading by heading.
+      footprint: "[[0.13, 0.084], [0.13, -0.084], [-0.13, -0.084], [-0.13, 0.084]]"
+      # Margin for localisation and control error on top of the body.
+      footprint_padding: 0.005
       always_send_full_costmap: true
-      plugins: ["obstacle_layer", "inflation_layer"]
+      # tof_layer before inflation, so ToF obstacles get the same cost band
+      # as LiDAR ones. Placed after inflation (lethal cell only) the robot
+      # drove onto the doorsill: one 5 cm cell was too little for MPPI.
+      plugins: ["obstacle_layer", "tof_layer", "inflation_layer"]
 
       obstacle_layer:
-        # ObstacleLayer, not VoxelLayer: one planar LiDAR, no 3D sensor.
+        # The planar LiDAR alone. The ToF ring has its own layer below: in a
+        # shared 2D layer the scan's clearing rays, passing over a shoe at
+        # 91.5 mm, erase the ToF mark the moment the ring stops re-marking it.
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: true
-        observation_sources: scan tof_obstacles
+        observation_sources: scan
         scan:
           topic: /scan
           data_type: LaserScan
@@ -42,32 +48,54 @@ local_costmap:
           obstacle_min_range: 0.0
           raytrace_max_range: 3.8
           raytrace_min_range: 0.0
+
+      tof_layer:
+        # Rasterises /tof/particles, the ToF memory kept by tof_particles in
+        # odom: each particle lives `decay` seconds after its last sighting,
+        # so a low obstacle stays marked while it sits in a gap between fans
+        # or under the ring. The particle node owns the memory; this layer's
+        # own decay only has to outlast one particle republish (10 Hz).
+        plugin: spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer
+        enabled: true
+        voxel_decay: 0.5
+        decay_model: 0        # linear
+        voxel_size: 0.05
+        track_unknown_space: true
+        mark_threshold: 0
+        update_footprint_enabled: true
+        combination_method: 1 # max with the layers below
+        origin_z: 0.0
+        publish_voxel_map: false  # /tof/particles is the thing to look at
+        transform_tolerance: 0.30
+        observation_sources: tof_particles
         # The ToF ring sees what the scan plane at 0.0915 m cannot: the 82 mm
         # band between the 9.5 mm ground clearance and that plane, where a
         # shoe or a doorsill stops the robot while being wholly invisible.
-        # These clouds are already classified - the floor is filtered out
-        # upstream, so no min_obstacle_height games are needed here.
-        tof_obstacles:
-          topic: /tof/obstacles
+        # The particles come from the classified cloud, floor already removed.
+        tof_particles:
+          topic: /tof/particles
           data_type: PointCloud2
-          clearing: true
           marking: true
-          # Heights are ground referenced: the clouds are published in
-          # base_footprint. The classifier already drops overhangs above the
-          # 0.0995 m roof; what it still publishes above it is wall, confirmed
-          # by a column of zones reaching down to the lowest upward row, so no
-          # height cut here - a far wall is only ever seen above the roof.
+          # Expiry is the particles' job; nothing here clears.
+          clearing: false
+          # Heights are ground referenced (odom z is the floor). What the
+          # classifier still publishes above the 0.0995 m roof is wall,
+          # confirmed by a column of zones down to the lowest upward row, so
+          # the cut must let walls through up to ~1.18 m (28.5 mm + 2 m *
+          # tan 30 deg).
           min_obstacle_height: 0.0
           max_obstacle_height: 1.2
-          # The classifier limits each kind itself: low obstacles 0.4 m, taller
-          # ones 1.0 m, walls 2.0 m. This is the outer bound only.
-          obstacle_max_range: 2.0
-          obstacle_min_range: 0.0
-          raytrace_max_range: 2.2
-          raytrace_min_range: 0.0
+          # STVL measures range from the cloud's origin, and this cloud's
+          # origin is odom's, not the robot's: any finite bound would drop
+          # particles by where the run started. The classifier already
+          # limits each kind (0.4 / 1.0 / 2.0 m) and the window clips the rest.
+          obstacle_range: 1000.0
 
       inflation_layer:
-        # Same values as the global costmap so tuning transfers.
+        # LiDAR and ToF obstacles alike. Must reach past the 0.155 m
+        # circumscribed radius: below it MPPI cannot use the inflation field
+        # to skip footprint checks and logs an error every cycle. The steep
+        # factor keeps cost near zero a few centimetres past the body.
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.22
+        inflation_radius: 0.17
         cost_scaling_factor: 8.0

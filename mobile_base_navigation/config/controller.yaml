@@ -149,9 +149,10 @@ controller_server:
         cost_weight: 3.81
         near_collision_cost: 253
         critical_cost: 300.0
-        # The footprint is circular and robot_radius already covers it, so
-        # per-point footprint checking buys nothing but CPU here.
-        consider_footprint: false
+        # The footprint is the real rectangle, so collision depends on heading
+        # and every trajectory point must be checked against its outline;
+        # a centre-point check would treat the body as a circle again.
+        consider_footprint: true
         collision_cost: 1000000.0
         near_goal_distance: 0.5
         trajectory_point_step: 2
