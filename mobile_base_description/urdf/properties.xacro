@@ -35,6 +35,39 @@
   <xacro:property name="body_com_z" value="0.030"/>
   <xacro:property name="wheel_mass" value="0.08"/>
 
+  <!-- Deck plate top face; its M3 insert grid is 20 mm pitch, rows at
+       x = 60 .. -60 mm, columns at y = +-10 and +-30 mm. -->
+  <xacro:property name="deck_top_z" value="0.05806"/>
+
+  <!-- 360-degree planar LiDAR, shaped after the D500 kit: square fixed base,
+       cylindrical rotating head. Bolted on the deck grid over rows 2-3 from
+       the front and the middle two columns, holes (40, +-10) and (20, +-10)
+       mm, so its centre is x = 30 mm on the centreline. lidar_link is the
+       scan plane, mid height of the head: 73 mm, clear of the 61.3 mm hull
+       and the 60 mm wheel tops. -->
+  <xacro:property name="lidar_base_size" value="0.048"/>
+  <xacro:property name="lidar_base_height" value="0.010"/>
+  <xacro:property name="lidar_head_radius" value="0.019"/>
+  <xacro:property name="lidar_head_height" value="0.010"/>
+  <xacro:property name="lidar_height"
+                  value="${lidar_base_height + lidar_head_height}"/>
+  <xacro:property name="lidar_collision_z" value="${-lidar_base_height / 2.0}"/>
+  <xacro:property name="lidar_mass" value="0.10"/>
+  <xacro:property name="lidar_x" value="0.030"/>
+  <xacro:property name="lidar_y" value="0.0"/>
+  <xacro:property name="lidar_z"
+                  value="${deck_top_z + lidar_base_height
+                           + lidar_head_height / 2.0 - base_link_height}"/>
+  <xacro:property name="lidar_samples" value="720"/>
+  <xacro:property name="lidar_update_rate" value="10.0"/>
+  <xacro:property name="lidar_min_angle" value="${-pi}"/>
+  <xacro:property name="lidar_max_angle" value="${pi}"/>
+  <xacro:property name="lidar_min_range" value="0.10"/>
+  <xacro:property name="lidar_max_range" value="4.0"/>
+  <xacro:property name="lidar_range_resolution" value="0.01"/>
+  <xacro:property name="lidar_noise_mean" value="0.0"/>
+  <xacro:property name="lidar_noise_stddev" value="0.01"/>
+
   <!-- Simulated IMU, on the floor of the hull at the centre. -->
   <xacro:property name="imu_length" value="0.025"/>
   <xacro:property name="imu_width" value="0.025"/>
