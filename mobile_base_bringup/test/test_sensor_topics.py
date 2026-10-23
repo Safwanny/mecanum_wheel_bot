@@ -17,8 +17,10 @@
 Launch Gazebo headlessly and verify the ROS sensor topic contract.
 
 Runs in my_world. Nothing here asserts world geometry - the checks are on
-frame ids, message shape, finiteness and covariances. Rev D carries only the
-IMU so far; LiDAR, camera and ToF checks return with those sensors (see the
+frame ids, message shape, finiteness and covariances. The one world-dependent
+requirement is that the LiDAR returns something finite: the robot spawns in
+the hall with walls 0.7 m away against a 4.0 m range. Rev D carries the IMU
+and LiDAR so far; camera and ToF checks return with those sensors (see the
 prototype-gnd tag for their old form).
 """
 
@@ -35,7 +37,7 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, LaserScan
 from tf2_msgs.msg import TFMessage
 
 
@@ -52,7 +54,9 @@ def generate_test_description():
             'rviz': 'false',
             'sensor_panel': 'false',
             'use_sim_time': 'true',
-            'render_engine': 'ogre',
+            # Software 'ogre' returns range_min on every LiDAR ray here, so
+            # the self-hit check below would test nothing; ogre2 needs a GPU.
+            'render_engine': 'ogre2',
         }.items(),
     )
     return LaunchDescription(
@@ -75,8 +79,8 @@ class TestSensorTopics(unittest.TestCase):
         cls.node.destroy_node()
         rclpy.shutdown()
 
-    def test_imu_and_odometry_messages(self):
-        received = {'imu': None, 'filtered': None}
+    def test_lidar_imu_and_odometry_messages(self):
+        received = {'scan': None, 'imu': None, 'filtered': None}
         odom_tf_received = False
 
         def tf_callback(message):
@@ -89,6 +93,12 @@ class TestSensorTopics(unittest.TestCase):
                 odom_tf_received = True
 
         subscriptions = [
+            self.node.create_subscription(
+                LaserScan,
+                '/scan',
+                lambda message: received.__setitem__('scan', message),
+                qos_profile_sensor_data,
+            ),
             self.node.create_subscription(
                 Imu,
                 '/imu/data',
@@ -107,6 +117,7 @@ class TestSensorTopics(unittest.TestCase):
         while time.monotonic() < deadline and (
                 None in received.values() or not odom_tf_received):
             rclpy.spin_once(self.node, timeout_sec=0.2)
+        self.assertIsNotNone(received['scan'], 'no /scan message received')
         self.assertIsNotNone(received['imu'], 'no /imu/data message received')
         self.assertIsNotNone(
             received['filtered'], 'no /odometry/filtered message received')
@@ -128,6 +139,21 @@ class TestSensorTopics(unittest.TestCase):
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
         self.assertTrue(future.done())
         self.assertFalse(future.result().values[0].bool_value)
+
+        scan = received['scan']
+        self.assertEqual(scan.header.frame_id, 'lidar_link')
+        self.assertGreater(scan.header.stamp.sec + scan.header.stamp.nanosec, 0)
+        self.assertGreater(len(scan.ranges), 100)
+        self.assertLess(scan.angle_min, scan.angle_max)
+        self.assertGreater(scan.angle_increment, 0.0)
+        self.assertAlmostEqual(scan.range_max, 4.0, delta=0.01)
+        finite_ranges = [value for value in scan.ranges if math.isfinite(value)]
+        self.assertTrue(finite_ranges)
+        self.assertTrue(all(scan.range_min <= value <= scan.range_max
+                            for value in finite_ranges))
+        # The scan plane clears the hull and wheels: nothing of the robot
+        # itself may show up, so the closest return is a wall, not a part.
+        self.assertGreater(min(finite_ranges), 0.3)
 
         imu = received['imu']
         self.assertEqual(imu.header.frame_id, 'imu_link')

@@ -477,8 +477,8 @@ def generate_launch_description():
                 description='Use the Gazebo simulation clock for ROS nodes.',
             ),
             DeclareLaunchArgument('gui', default_value='true'),
-            # Rev D has no LiDAR or ToF mounted yet, so all of these start
-            # off; they come back as each sensor is placed on the hull.
+            # Rev D has no ToF mounted yet, so these start off; they come
+            # back as each sensor is placed on the hull.
             # The ToF ray markers are a visualisation aid, not part of
             # the sensor pipeline, so they can be turned off without
             # affecting the clouds the sensors publish.
@@ -489,7 +489,7 @@ def generate_launch_description():
             # The sensor power window; the switchboard itself always runs.
             DeclareLaunchArgument('sensor_panel', default_value='false'),
             # Start with the LiDAR switched off, e.g. for ToF-only navigation.
-            DeclareLaunchArgument('lidar', default_value='false'),
+            DeclareLaunchArgument('lidar', default_value='true'),
             DeclareLaunchArgument('rviz', default_value='true'),
             # Controller spawners start RViz from a delayed process-exit
             # handler. Capture this include's value now so a later include
